@@ -1,0 +1,1358 @@
+
+// NetScanDemoDlg.cpp : implementation file
+//
+#include <iostream>
+#include <Windows.h>
+#include "stdafx.h"
+#include "NetScanDemo.h"
+#include "NetScanDemoDlg.h"
+#include "afxdialogex.h"
+#include "../inc/RYPrtCtler.h"
+
+#ifdef _DEBUG
+#define new DEBUG_NEW
+#endif
+static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
+extern RYUSR_PARAM g_sysParam;
+extern MOV_Config g_movConfig;
+PRTJOB_ITEM g_testJob;
+PRTIMG_LAYER g_PrtImgLayer;
+RYCalbrationParam g_Calbration;
+BOOL g_bPHValid[MAX_PH_CNT] = { 0 };
+// CAboutDlg dialog used for App About
+LPPRINTER_INFO g_pSysInfo;
+UINT g_nPHType = 0;
+bool g_IsRoladWave = false;
+class CAboutDlg : public CDialogEx
+{
+public:
+	CAboutDlg();
+
+// Dialog Data
+	enum { IDD = IDD_ABOUTBOX };
+
+	protected:
+	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV support
+
+// Implementation
+protected:
+	DECLARE_MESSAGE_MAP()
+};
+
+CAboutDlg::CAboutDlg() : CDialogEx(CAboutDlg::IDD)
+{
+}
+
+void CAboutDlg::DoDataExchange(CDataExchange* pDX)
+{
+	CDialogEx::DoDataExchange(pDX);
+}
+
+BEGIN_MESSAGE_MAP(CAboutDlg, CDialogEx)
+END_MESSAGE_MAP()
+
+
+// CNetScanDemoDlg dialog
+
+void InitImgLayerInfo()
+{
+	//////////////////////层信息
+	ZeroMemory(&g_PrtImgLayer, sizeof(PRTIMG_LAYER));
+	g_PrtImgLayer.nLayerIndex = -1;	//保持递增关系
+	g_PrtImgLayer.nXDPI = 720;
+	g_PrtImgLayer.nYDPI = 600;
+	g_PrtImgLayer.nColorCnts = 1;
+	g_PrtImgLayer.nGrayBits=1;
+	g_PrtImgLayer.nPrtDir = 1;
+	g_PrtImgLayer.nValidClrMask = 0xFFFF;
+	g_PrtImgLayer.fLayerDensity = 1;
+	g_PrtImgLayer.nPrtFlag = 1;	//双向打印 bit[0] 控制单双向打印 bit1 Y反向打印
+
+}
+
+void InitJobInfo()
+{
+	//////////////////////Job信息
+	ZeroMemory(&g_testJob, sizeof(PRTJOB_ITEM));
+	g_testJob.nJobID = 0;
+	CopyMemory(g_testJob.szJobName, "Scan Demo", 9);
+	g_testJob.fPrtXPos = 100;
+	g_testJob.fClipHeight = 0;
+	g_testJob.fClipWidth = 0;
+	g_testJob.fOutXdpi = 600;
+	g_testJob.fOutYdpi = 600;
+	g_testJob.nFileType = 0;
+	g_testJob.nOutPixelBits = 1;
+	
+}
+
+void InitCalibrationInfo()
+{
+	ZeroMemory(&g_Calbration, sizeof(PRTJOB_ITEM));
+	g_Calbration.fPrtXPos = 10;
+	g_Calbration.fPrtYPos = 0;
+	g_Calbration.fStpSize = 0;
+	g_Calbration.fxadjdpi = 600;
+	g_Calbration.fXMaxPrtWidth = 600;
+	g_Calbration.fXRunSpd = 10;
+	g_Calbration.fYMaxPrtHeight = 600;
+	g_Calbration.nAdjType = 0;
+	g_Calbration.nCtrlValue = 0;
+	g_Calbration.nGrayBits = 1;
+	g_Calbration.nPrtDir = 1;
+	
+}
+
+CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
+	: CDialogEx(CNetScanDemoDlg::IDD, pParent)
+	, m_bCloseAutoCheck(FALSE)
+	, m_szPrtFile(_T(""))
+	, m_bEnableInkWacth(FALSE)
+{
+	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+	m_bJobStarted = false;
+	m_bPrinting = false;
+	m_bStopMonitor = false;
+	m_nPrtRevColumn = 0;
+	m_nPrtEncoderVal = 0;
+	m_nJobImgLayerCnts=1;
+	m_bImageLoaded=FALSE;
+	for(int c=0;c<MAX_COLORS;c++)
+		m_pPrtData[c]=NULL;
+
+}
+
+void CNetScanDemoDlg::DoDataExchange(CDataExchange* pDX)
+{
+	CDialogEx::DoDataExchange(pDX);
+	DDX_Control(pDX, IDC_STATIC_PRT_INFO, m_ListPrtInfo);
+	DDX_Control(pDX, IDC_STATIC_VT_INFO, m_ListDrvInfo);
+	DDX_Check(pDX, IDC_CHECK_CLOSE_VT_MONITOR, m_bCloseAutoCheck);
+	DDX_Control(pDX, IDC_STATIC_RIP_VIEW, m_ImgPreView);
+	DDX_Text(pDX, IDC_MFC_PRT_FILE_PATH, m_szPrtFile);
+	DDX_Check(pDX, IDC_CHECK_INK_WATCH, m_bEnableInkWacth);
+}
+
+BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
+	ON_WM_SYSCOMMAND()
+	ON_WM_PAINT()
+	ON_WM_QUERYDRAGICON()
+	ON_BN_CLICKED(IDC_BUTTON_STARTJOB, &CNetScanDemoDlg::OnBnClickedButtonStartjob)
+	ON_BN_CLICKED(IDC_BUTTON_LOADIMG, &CNetScanDemoDlg::OnBnClickedButtonLoadimg)
+	ON_BN_CLICKED(IDC_BUTTON_RELOADWAVE, &CNetScanDemoDlg::OnBnClickedButtonReloadwave)
+	ON_BN_CLICKED(IDC_BUTTON_VT_SET, &CNetScanDemoDlg::OnBnClickedButtonVtSet)
+	ON_BN_CLICKED(IDC_BUTTON_CALI, &CNetScanDemoDlg::OnBnClickedButtonCali)
+	ON_BN_CLICKED(IDC_BUTTON_SYS_PARAM, &CNetScanDemoDlg::OnBnClickedButtonSysParam)
+	ON_BN_CLICKED(IDC_BUTTON_FLASH, &CNetScanDemoDlg::OnBnClickedButtonFlash)
+	ON_BN_CLICKED(IDC_BUTTON_RESET_ENCODER, &CNetScanDemoDlg::OnBnClickedButtonResetEncoder)
+	ON_EN_CHANGE(IDC_MFC_PRT_FILE_PATH, &CNetScanDemoDlg::OnEnChangeMfcPrtFilePath)
+	ON_WM_DESTROY()
+	ON_BN_CLICKED(IDC_BUTTON_MOVCTL, &CNetScanDemoDlg::OnBnClickedButtonMovctl)
+	ON_BN_CLICKED(IDC_BUTTON_AIR_INK, &CNetScanDemoDlg::OnBnClickedButtonAirInk)
+	ON_BN_CLICKED(IDC_BUTTON_ADIB_CTL, &CNetScanDemoDlg::OnBnClickedButtonAdibCtl)
+	ON_BN_CLICKED(IDC_CHECK_INK_WATCH, &CNetScanDemoDlg::OnBnClickedCheckInkWatch)
+	ON_BN_CLICKED(IDC_BUTTON1, &CNetScanDemoDlg::OnBnClickedButton1)
+	ON_BN_CLICKED(IDC_BUTTON3, &CNetScanDemoDlg::OnBnClickedButton3)
+	ON_BN_CLICKED(IDC_BUTTON4, &CNetScanDemoDlg::OnBnClickedButton4)
+	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
+END_MESSAGE_MAP()
+
+
+// CNetScanDemoDlg message handlers
+
+
+void CNetScanDemoDlg::InitsysParam() {
+	ZeroMemory(&g_sysParam, sizeof(RYUSR_PARAM));
+}
+
+
+
+void CNetScanDemoDlg::UpdateVTListInfo() {
+	CRect rect; CString szTxt, szItem;
+	HTREEITEM hRoot, hPrtItem, hDrvItem;
+	int nTmpCnt = g_pSysInfo->clrph_info[0].nTmpQueryCnt;
+	int nVolCnt = g_pSysInfo->clrph_info[0].nVolQueryCnt;
+	int nSplit = 1;
+	if (g_pSysInfo->clrph_info[0].nPhType == 19) // XAAR2001
+		nSplit = 4;
+    nVolCnt /= nSplit;
+	if(g_pSysInfo->clrph_info[0].nPhType == 28)//s3200
+	{
+		nVolCnt =2;
+	}
+	
+	int nCurIndex = 1;
+	hRoot = m_ListDrvInfo.m_childTree.GetRootItem();
+	hPrtItem = m_ListDrvInfo.m_childTree.GetChildItem(hRoot);
+	for (int p = 0; p < MAX_MCP_CNT; p++) {
+		if (g_pSysInfo->nMcpValidMask & (1 << p)) {
+			hDrvItem = m_ListDrvInfo.m_childTree.GetChildItem(hPrtItem);
+			for (int d = 0; d < MCP_DRV_CNT; d++) {
+				if (g_pSysInfo->nMcpDrvLinkMask[p] & (1 << d)) {
+					for (int s = 0; s < nSplit; s++) {
+						for (int t = 0; t < nTmpCnt; t++) {
+							szTxt.Format(_T("%.1f"), g_pSysInfo->sysDrvInfo[p][d].phinfo[0].fCurTemp[t]);
+							m_ListDrvInfo.SetItemText(hDrvItem, nCurIndex, szTxt);
+							nCurIndex++;
+						}
+						for (int v = 0; v < nVolCnt; v++) {
+							szTxt.Format(_T("%.1f"), g_pSysInfo->sysDrvInfo[p][d].phinfo[0].fCurVol[s*nVolCnt + v]);
+							m_ListDrvInfo.SetItemText(hDrvItem, nCurIndex, szTxt);
+							nCurIndex++;
+						}
+						nCurIndex = 1;
+						hDrvItem = m_ListDrvInfo.m_childTree.GetNextSiblingItem(hDrvItem);
+					}
+				}
+			}
+			hPrtItem = m_ListDrvInfo.m_childTree.GetNextSiblingItem(hPrtItem);
+		}
+	}
+
+}
+
+BOOL CNetScanDemoDlg::InitDeviceInfo()
+{
+	if (g_pSysInfo == NULL)
+		return FALSE;
+	int nTmpCount = g_pSysInfo->clrph_info[0].nTmpQueryCnt;
+	int nVolCount = g_pSysInfo->clrph_info[0].nVolQueryCnt;
+	int nSplit = 1;
+	if (g_pSysInfo->clrph_info[0].nPhType == 19)
+		nSplit = 4;
+
+	if (g_pSysInfo->clrph_info[0].nPhType == 28)
+	{
+		nVolCount = 2;
+	}
+	CRect rect; CString szTxt, szItem;
+	HTREEITEM hRoot, hPrtItem, hDrvItem;
+	m_ListPrtInfo.GetClientRect(&rect);
+	int nUnitWidth = rect.Width() / 8;
+	m_ListPrtInfo.InsertColumn(0, _T("网络板卡"), LVCFMT_CENTER, nUnitWidth * 2, 0);
+	m_ListPrtInfo.InsertColumn(1, _T("主卡"), LVCFMT_CENTER, nUnitWidth, 1);
+	m_ListPrtInfo.InsertColumn(2, _T("设备号"), LVCFMT_CENTER, nUnitWidth, 2);
+	m_ListPrtInfo.InsertColumn(3, _T("FPGA版本"), LVCFMT_CENTER, nUnitWidth, 3);
+	m_ListPrtInfo.InsertColumn(4, _T("MCU版本"), LVCFMT_CENTER, nUnitWidth, 4);
+	m_ListPrtInfo.InsertColumn(5, _T("Appmain版本"), LVCFMT_CENTER, nUnitWidth, 5);
+	m_ListPrtInfo.InsertColumn(6, _T("连接掩码"), LVCFMT_CENTER, nUnitWidth, 6);
+	int  nDrvIndex;
+	CImageList m_imgBtns;
+	hRoot = m_ListPrtInfo.m_childTree.InsertItem(_T("网络板"), 0, 0);
+	for (int p = 0; p < MAX_MCP_CNT; p++) {
+		if (g_pSysInfo->nMcpValidMask & (1 << p)) {
+			szTxt = "";
+			szItem.Format(_T("网络卡%d"), p + 1);
+			szTxt += szItem;
+			hPrtItem = m_ListPrtInfo.m_childTree.InsertItem(szTxt, 1, 1, hRoot, TVI_LAST);
+			if (g_pSysInfo->nMaiMcpIndex == p) {
+				szTxt.Format(_T("是"));
+				m_ListPrtInfo.SetItemText(hPrtItem, 1, szTxt);
+			}
+			else {
+				szTxt.Format(_T("否"));
+				m_ListPrtInfo.SetItemText(hPrtItem, 1, szTxt);
+			}
+			szTxt.Format(_T("%08X"), g_pSysInfo->nMcpDeviceID[p]);
+			m_ListPrtInfo.SetItemText(hPrtItem, 2, szTxt);
+			szTxt.Format(_T("%08X"), g_pSysInfo->nMcpFpgaVer[p]);
+			m_ListPrtInfo.SetItemText(hPrtItem, 3, szTxt);
+			szTxt.Format(_T("%08X"), g_pSysInfo->nMcpMcuVersion[p]);
+			m_ListPrtInfo.SetItemText(hPrtItem, 4, szTxt);
+			szTxt.Format(_T("%08X"), g_pSysInfo->nMcpAppVersion[p]);
+			m_ListPrtInfo.SetItemText(hPrtItem, 5, szTxt);
+			szTxt.Format(_T("%08X"), g_pSysInfo->nMcpDrvLinkMask[p]);
+			m_ListPrtInfo.SetItemText(hPrtItem, 6, szTxt);
+			m_ListPrtInfo.m_childTree.Expand(hPrtItem, TVE_EXPAND);
+		}
+	}
+	m_ListPrtInfo.m_childTree.Expand(hRoot, TVE_EXPAND);
+	m_ListDrvInfo.GetClientRect(&rect);
+	nVolCount /= nSplit;
+	nUnitWidth = rect.Width() / (nTmpCount + nVolCount + 2 + 2);
+	m_ListDrvInfo.InsertColumn(0, _T("网络板卡"), LVCFMT_CENTER, nUnitWidth * 2, 0);
+	CString szText;
+	for (int i = 0; i < nTmpCount; i++) {
+		szText.Format(_T("温度T%d"), i);
+		m_ListDrvInfo.InsertColumn(i + 1, szText, LVCFMT_CENTER, nUnitWidth, i + 1);
+	}
+	for (int i = 0; i < nVolCount; i++) {
+		szText.Format(_T("电压V%d"), i);
+		m_ListDrvInfo.InsertColumn(i + nTmpCount + 1, szText, LVCFMT_CENTER, nUnitWidth, i + 1 + nTmpCount);
+	}
+	int nCurIndex = nTmpCount + nVolCount + 1;
+	m_ListDrvInfo.InsertColumn(nCurIndex, _T("fpga版本"), LVCFMT_CENTER, nUnitWidth, nCurIndex);
+	m_ListDrvInfo.InsertColumn(nCurIndex + 1, _T("mcu版本"), LVCFMT_CENTER, nUnitWidth, nCurIndex + 1);
+	hRoot = m_ListDrvInfo.m_childTree.InsertItem(_T("网络板"), 0, 0);
+	for (int p = 0; p < MAX_MCP_CNT; p++) {
+		if (g_pSysInfo->nMcpValidMask & (1 << p)) {
+			szTxt = "";
+			szItem.Format(_T("网络卡%d"), p + 1);
+			szTxt += szItem;
+			hPrtItem = m_ListDrvInfo.m_childTree.InsertItem(szTxt, 1, 1, hRoot, TVI_LAST);
+			for (int d = 0; d < MCP_DRV_CNT; d++) {
+				if (g_pSysInfo->nMcpDrvLinkMask[p] & (1 << d)) {
+					for (int s = 0; s < nSplit; s++) {
+						szTxt = "";
+						if (s == 0)
+							szTxt.Format(_T("驱动卡%d"), d + 1);
+						hDrvItem = m_ListDrvInfo.m_childTree.InsertItem(szTxt, 1, 1, hPrtItem, TVI_LAST);
+						for (int i = 0; i < nTmpCount; i++) {
+							szText.Format(_T("%.1f"), g_pSysInfo->sysDrvInfo[p][d].phinfo[0].fCurTemp[i]);
+							m_ListDrvInfo.SetItemText(hDrvItem, i + 1, szText);
+						}
+						nCurIndex = nTmpCount + 1;
+						for (int i = 0; i < nVolCount; i++) {
+							szText.Format(_T("%.1f"), g_pSysInfo->sysDrvInfo[p][d].phinfo[0].fCurVol[s * nVolCount + i]);
+							m_ListDrvInfo.SetItemText(hDrvItem, nCurIndex + i, szText);
+						}
+						nCurIndex += nVolCount;
+						szText.Format(_T("%x"), g_pSysInfo->sysDrvInfo[p][d].nFpgaVersion);
+						m_ListDrvInfo.SetItemText(hDrvItem, nCurIndex, szText);
+						nCurIndex += 1;
+						szText.Format(_T("%x"), g_pSysInfo->sysDrvInfo[p][d].nFMVersion);
+						m_ListDrvInfo.SetItemText(hDrvItem, nCurIndex, szText);
+					}
+					m_ListDrvInfo.m_childTree.Expand(hDrvItem, TVE_EXPAND);
+				}
+			}
+			m_ListDrvInfo.m_childTree.Expand(hPrtItem, TVE_EXPAND);
+		}
+	}
+	m_ListDrvInfo.m_childTree.Expand(hRoot, TVE_EXPAND);
+	// TODO:  在此添加额外的初始化
+
+	return TRUE;  // return TRUE unless you set the focus to a control
+				  // 异常: OCX 属性页应返回 FALSE
+}
+
+void CNetScanDemoDlg::InitMoveSys() {
+#ifdef RY_MOVE_CTL
+	CString szErr;
+	int nResult = DEM_Initialize(m_szAppPath.GetBuffer(0));
+	if (nResult != 0) {
+		szErr.Format(_T("[%d] >> 连接运动卡失败"), nResult);
+	}
+#endif // RY_MOVE_CTL
+
+}
+void CNetScanDemoDlg::InitSystem()
+{
+	EnableWindow(FALSE);
+	CString szErrInfo;
+	///执行设备连接
+	USES_CONVERSION;
+	int nResult=0;
+	clock_t EndTime;
+	clock_t StartTime;
+	g_IsRoladWave = true;
+	//CString AppmianRuteTemp = m_szAppPath  + "appmian";
+	//char* AppmianRute = (char*)(AppmianRuteTemp.GetBuffer(0));
+	//CString AppmianRute = m_szAppPath  + "appmian";
+	DEV_OpenDevice(m_hWnd, (unsigned char*)(m_szAppPath.GetBuffer(0)));	//(unsigned char*)(LPCTSTR)m_szAppPath
+	nResult = DEV_DeviceIsConnected();
+	StartTime = clock();
+	while (!DEV_DeviceIsConnected())
+	{
+		Sleep(500);
+		nResult = DEV_DeviceIsConnected();
+		EndTime = clock();
+	//	break;
+		if(EndTime - StartTime > 1000*2)
+		{
+			AfxMessageBox("板卡超时未连接");
+			break;
+		}
+	}
+		
+	
+	//初始化参数，需要在 DEV_InitDevice 之前执行		
+	DEV_UpdateParam(&g_sysParam);
+	//if(!DEV_UpdateParam(&g_sysParam))
+	//{
+		//AfxMessageBox("DEV_UpdateParam error");
+	//}
+	//初始化设备
+    nResult = DEV_InitDevice(ZERO_POSITION);	//包含加载波形
+	if (nResult < 0)
+	{
+		szErrInfo.Format(_T("[%d] >> 初始化设备失败"), nResult);
+		AfxMessageBox(szErrInfo);
+	}
+	////获取设备当前状态信息，用来判断初始化状态
+	g_pSysInfo = DEV_GetDeviceInfo();
+	for (int c = 0; c < g_pSysInfo->nSysColors; c++) {
+		for (int g = 0; g < MAX_GROUP; g++) {
+			g_bPHValid[g_pSysInfo->nPhIDLKT[c][g]] = TRUE;
+		}
+	}
+	for (int p = 0; p < MAX_MCP_CNT; p++) {
+		for (int d = 0; d < MCP_DRV_CNT; d++) {
+			if (g_pSysInfo->sysDrvInfo[p][d].nState == 1) {
+				g_nPHType = g_pSysInfo->sysDrvInfo[p][d].phinfo[0].nPhType;
+			}
+		}
+	}
+	InitDeviceInfo();
+	if(nResult>0){
+	    AfxMessageBox(_T("初始化成功"));
+	}
+	AfxBeginThread(MonitorThread, this);
+	//SetTimer(0x1000, 300, NULL);
+
+	EnableWindow(TRUE);
+
+}
+typedef    BOOL(CALLBACK* LPRY_EXTFUN_RFIDOpen)(int);
+LPRY_EXTFUN_RFIDOpen          RY_RFIDOpen = NULL;
+BOOL CNetScanDemoDlg::OnInitDialog()
+{
+	CDialogEx::OnInitDialog();
+	// Add "About..." menu item to system menu.
+
+	// IDM_ABOUTBOX must be in the system command range.
+	ASSERT((IDM_ABOUTBOX & 0xFFF0) == IDM_ABOUTBOX);
+	ASSERT(IDM_ABOUTBOX < 0xF000);
+
+	CMenu* pSysMenu = GetSystemMenu(FALSE);
+	if (pSysMenu != NULL)
+	{
+		BOOL bNameValid;
+		CString strAboutMenu;
+		bNameValid = strAboutMenu.LoadString(IDS_ABOUTBOX);
+		ASSERT(bNameValid);
+		if (!strAboutMenu.IsEmpty())
+		{
+			pSysMenu->AppendMenu(MF_SEPARATOR);
+			pSysMenu->AppendMenu(MF_STRING, IDM_ABOUTBOX, strAboutMenu);
+		}
+	}
+	CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
+	if (pApp->LoadParam(&g_sysParam) < 0)
+		InitsysParam();
+	if (pApp->LoadJobParam() < 0)
+		InitJobInfo();
+	if (pApp->LoadLayerParam() <0)
+		InitImgLayerInfo();
+
+	if(pApp->LoadCalibrationParam() < 0)
+	{
+		InitCalibrationInfo();
+	}
+	// Set the icon for this dialog.  The framework does this automatically
+	//  when the application's main window is not a dialog
+	SetIcon(m_hIcon, TRUE);			// Set big icon
+	SetIcon(m_hIcon, FALSE);		// Set small icon
+#ifdef RY_MOVE_CTL
+	InitMoveSys();
+#endif
+	InitSystem();
+	// TODO: Add extra initialization here
+
+	return TRUE;  // return TRUE  unless you set the focus to a control
+}
+
+void CNetScanDemoDlg::OnSysCommand(UINT nID, LPARAM lParam)
+{
+	if ((nID & 0xFFF0) == IDM_ABOUTBOX)
+	{
+		CAboutDlg dlgAbout;
+		dlgAbout.DoModal();
+	}
+	else
+	{
+		CDialogEx::OnSysCommand(nID, lParam);
+	}
+}
+
+// If you add a minimize button to your dialog, you will need the code below
+//  to draw the icon.  For MFC applications using the document/view model,
+//  this is automatically done for you by the framework.
+
+void CNetScanDemoDlg::OnPaint()
+{
+	if (IsIconic())
+	{
+		CPaintDC dc(this); // device context for painting
+
+		SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
+
+		// Center icon in client rectangle
+		int cxIcon = GetSystemMetrics(SM_CXICON);
+		int cyIcon = GetSystemMetrics(SM_CYICON);
+		CRect rect;
+		GetClientRect(&rect);
+		int x = (rect.Width() - cxIcon + 1) / 2;
+		int y = (rect.Height() - cyIcon + 1) / 2;
+
+		// Draw the icon
+		dc.DrawIcon(x, y, m_hIcon);
+	}
+	else
+	{
+		CDialogEx::OnPaint();
+	}
+}
+
+// The system calls this function to obtain the cursor to display while the user drags
+//  the minimized window.
+HCURSOR CNetScanDemoDlg::OnQueryDragIcon()
+{
+	return static_cast<HCURSOR>(m_hIcon);
+}
+void CNetScanDemoDlg::UpdatePrtState(UINT nState)
+{
+	//	CWnd* pWnd=(CWnd*)GetDlgItem(IDC_BTN_PRINT);
+	CString szTxt;
+	switch (nState)
+	{
+	case 0:
+		szTxt.Format(_T("Royal 3DP Demo 当前编码位置：%08X"), m_nPrtEncoderVal);
+		break;
+	case 1:
+		szTxt.Format(_T("打印 剩余列数:%d  当前位置编码:%08X"), m_nPrtRevColumn, m_nPrtEncoderVal);
+		break;
+	case 2:
+		szTxt.Format(_T("暂停 剩余列数:%d  当前位置编码:%08X"), m_nPrtRevColumn, m_nPrtEncoderVal);
+		break;
+	case 3:
+		szTxt = _T("闪喷");
+		break;
+	case 4:
+		szTxt.Format(_T("Royal 3DP Demo 当前编码位置：%08X"), m_nPrtEncoderVal);
+		break;
+	}
+	SetWindowText(szTxt);
+}
+
+UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
+{
+	PrtRunInfo prtInfo;
+
+	bool tetetttt = true;
+	UINT  nLastPrtState = 0xFF;
+	DWORD dwTick = GetTickCount();
+	DWORD dwChkTick = GetTickCount();
+	//bool bstatus = false;
+	CNetScanDemoDlg* pCtlDlg = (CNetScanDemoDlg*)lpvoid;
+	while (!pCtlDlg->m_bStopMonitor)
+	{
+		//tetetttt = DEV_DeviceIsConnected();
+		//if(tetetttt)
+		//{
+		//	AfxMessageBox("11111111");
+		//}else{
+		//	AfxMessageBox("2222222");
+		//}
+		//test start
+		//g_pSysInfo = DEV_GetDeviceInfo();
+		//DEV_GetPrinterEncValue();
+		//test end
+		 DEV_DeviceIsConnected();
+		if(!IDP_GetPrintState(&prtInfo))
+		{
+			AfxMessageBox("IDP_GetPrintState error");
+		}
+		if (prtInfo.nPrtState == 0 || prtInfo.nPrtState == 3)
+		{
+			if ((GetTickCount() - dwChkTick) > 200)
+			{
+				if (!pCtlDlg->m_bCloseAutoCheck)
+				{
+					g_pSysInfo = DEV_GetDeviceInfo();
+
+					if(17 == g_pSysInfo->nHWInitResult && g_IsRoladWave)
+					{
+						AfxMessageBox("波形文件失败");
+						g_IsRoladWave = false;
+					}
+
+					if (g_pSysInfo)
+						pCtlDlg->UpdateVTListInfo();
+					
+					//pCtlDlg->ReDraw();
+				}
+				dwChkTick = GetTickCount();
+			}
+		}
+		pCtlDlg->m_nPrtRevColumn = prtInfo.nRevPrtCols;
+		pCtlDlg->m_nPrtEncoderVal = DEV_GetPrinterEncValue();
+		if (1)
+		{
+			pCtlDlg->UpdatePrtState(prtInfo.nPrtState);
+			nLastPrtState = prtInfo.nPrtState;
+		}
+		Sleep(100);
+	}
+	AfxEndThread(0, TRUE);
+	return 0;
+}
+#include "CPrtJobDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonStartjob()
+{
+	// TODO:在此添加控件通知处理程序代码
+	CString szErr;	
+	if(1)
+	{
+		if (g_PrtImgLayer.nImgType == 0) 
+		{
+			int nRet = GetSrcData(m_szPrtFile);
+			if (nRet < 0) {
+				if (nRet == -1)
+					AfxMessageBox(_T("请先确认图层信息"));
+				else
+				    AfxMessageBox(_T("图片数据未成功加载"));
+				return;
+			}  
+		}
+		if(!m_bImageLoaded)
+		{
+			AfxMessageBox(_T("未加载图像数据"));
+			return;
+		}
+	}
+	if (!m_bJobStarted) 
+	{
+		CPrtJobDlg dlg;
+		dlg.m_nImageLayerCount=m_nJobImgLayerCnts;
+		if (dlg.DoModal() == IDOK) 
+		{
+			m_nJobImgLayerCnts=dlg.m_nImageLayerCount;
+			if(m_nJobImgLayerCnts>0)
+			{
+				m_bJobStarted = true;
+				GetDlgItem(IDC_BUTTON_LOADIMG)->EnableWindow(true);
+				GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("停止任务"));
+				g_PrtImgLayer.nLayerIndex = -1;
+				g_PrtMutex = CreateMutex(NULL,FALSE,"Mutex");
+				AfxBeginThread(PrintThreadSeparate,this);
+				//Sleep(5000);
+				AfxBeginThread(PrintThread,this);
+				CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
+				if (pApp) {
+					pApp->SaveJobParam();
+				}
+			}
+		}
+	}
+	else 
+	{
+		IDP_StopPrintJob();
+		m_bJobStarted = false;
+		GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("启动任务"));
+	}
+}
+
+int CNetScanDemoDlg::GetSrcData(CString lpSrcFile)
+{
+	CString szFileName;
+	for (int c = 0; c < g_PrtImgLayer.nColorCnts; c++) 
+	{
+		int i = 0;
+		int nsl = lpSrcFile.GetLength();
+		TCHAR   TempCh;
+		for (i = nsl - 1; i > 0; i--)
+		{
+			TempCh = lpSrcFile.GetAt(i);
+			if (TempCh == _T('\\'))
+				break;
+		}
+		lpSrcFile = lpSrcFile.Left(i);
+		szFileName.Format(_T("\\%d.bmp"), c+1);
+		lpSrcFile += szFileName;
+		if (lpSrcFile.Find(_T(".bmp")) <= 0)
+			return -4;	//文件格式不符合{
+
+		CFile file;
+		if (!file.Open(lpSrcFile, CFile::modeRead))
+		{
+			return -2;
+		}
+		m_nPrtDataSize = file.GetLength();
+
+		LPBYTE pDataBuf = new BYTE[m_nPrtDataSize + 0x100000];
+		ZeroMemory(pDataBuf, m_nPrtDataSize + 0x100000);
+		file.Read(pDataBuf, m_nPrtDataSize);
+		file.Close();
+		/////////////////处理图层和打印参数
+		BITMAPFILEHEADER* pfheader;
+		BITMAPINFOHEADER* pbmpheader;
+		pfheader = (BITMAPFILEHEADER*)pDataBuf;
+		pbmpheader = (BITMAPINFOHEADER*)(pDataBuf + sizeof(BITMAPFILEHEADER));
+		if (pbmpheader->biBitCount != 1)		//仅支持单点图像
+		{
+			delete pDataBuf;
+			return -3;
+		}
+		int m_nVIDOffset = pfheader->bfOffBits;
+		m_nPrtDataSize -= m_nVIDOffset;		//多通道时，要保证图片大小尺寸一致
+
+		RGBQUAD* pcolor = (RGBQUAD*)(pDataBuf + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
+		COLORREF clrZeroColor = RGB(pcolor[0].rgbRed, pcolor[0].rgbGreen, pcolor[0].rgbBlue);
+		LPBYTE pSrcData = pDataBuf + m_nVIDOffset;
+		if (clrZeroColor == 0)	//数据需要取反 位图属性决定
+		{
+			for (int s = 0; s < m_nPrtDataSize; s++)	//pbmpheader->biSizeImage
+				pSrcData[s] = ~pSrcData[s];
+		}
+		if(m_pPrtData[c])
+		{
+			delete m_pPrtData[c];
+			m_pPrtData[c]=NULL;
+		}
+		m_pPrtData[c] = new BYTE[m_nPrtDataSize + 0x100000];
+		CopyMemory(m_pPrtData[c], pSrcData, m_nPrtDataSize);
+		if(pbmpheader->biSizeImage == 0)
+		{
+			g_PrtImgLayer.nBytesPerLine = (pbmpheader->biWidth+31)/32;	 //每行数据字节数
+		}
+		else
+		{
+			g_PrtImgLayer.nBytesPerLine = pbmpheader->biSizeImage / pbmpheader->biHeight;	 //每行数据字节数
+		}
+		
+		g_PrtImgLayer.nHeight = pbmpheader->biHeight;
+		g_PrtImgLayer.nWidth = pbmpheader->biWidth / g_PrtImgLayer.nGrayBits;
+		delete pDataBuf;
+		m_bImageLoaded=TRUE;
+	}
+	g_PrtImgLayer.nLayerIndex = 0;
+	return  g_PrtImgLayer.nLayerIndex;
+}
+#include "CImgLayerSetDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	UpdateData();
+	CString szErr;
+	int nResult = 0;
+	CImgLayerSetDlg dlg;
+	dlg.DoModal();
+	CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
+	if (pApp) {
+		pApp->SaveLayerParam();
+	}
+	/*
+	if (dlg.DoModal() == IDOK) 
+	{
+	}*/
+}
+//
+//WriteDataThread
+/********************************************
+打印执行的处理
+**********************************************/
+
+
+#define MAXSIZE 5
+
+/*循环队列的顺序存储结构*/
+typedef struct
+{
+	int nLayerIndex;//起始图层序号
+	//int nPrtNum;
+	int front;    //头指针
+	int rear;    //尾指针
+}SeQueue;
+SeQueue PrtQue;
+
+/*初始化一个空队列*/
+int Init_SeQueue(SeQueue *Q)
+{
+	//Q=(SeQueue *)malloc(sizeof(SeQueue));
+	//if(Q!=NULL)
+	{
+		Q->front=0;
+		Q->rear=0;
+		Q->nLayerIndex = 0;
+		//Q->nPrtNum =0;
+	}
+	return 1;
+}
+
+
+
+/*判空*/
+int SeQueue_Empty(SeQueue *Q)
+{
+	return Q->rear==Q->front;
+}
+
+/*判满*/
+int SeQueue_Full(SeQueue *Q)
+{
+	return (Q->rear+1)%MAXSIZE==Q->front;
+}
+
+/*入队操作*/
+int Enter_SeQueue(SeQueue *Q)
+{
+	if(SeQueue_Full(Q))
+	{
+		return 0;
+	}
+	Q->nLayerIndex++;
+	Q->rear=(Q->rear+1)%MAXSIZE;
+	return 1;
+}
+
+/*出队操作*/
+int Delete_SeQueue(SeQueue *Q)
+{
+	if(SeQueue_Empty(Q))
+	{
+		return 0;
+	}
+
+	Q->front=(Q->front+1)%MAXSIZE;
+	return 1;
+}
+
+
+
+
+
+int PrtBuffNum = 0;
+
+UINT  CNetScanDemoDlg::PrintThreadSeparate(LPVOID pvoid)
+{
+	CNetScanDemoDlg* pdlg = (CNetScanDemoDlg*)pvoid;
+	CString szErr;
+	int Result;
+	LPBYTE pBmpFile[MAX_COLORS];
+	LPPRTIMG_LAYER pLayer = &g_PrtImgLayer;
+	int n = sizeof(PRTIMG_LAYER);
+	
+
+	::OutputDebugString(_T("[RYZ] Start IDP_SartPrintJob1111111111111111"));
+	int nResult = IDP_SartPrintJob(&g_testJob);
+	::OutputDebugString(_T("[RYZ] end IDP_SartPrintJob1111111111111111"));
+
+	if (nResult < 0)
+	{
+		szErr.Format(_T("启动任务失败，错误号为：%d"), nResult);
+		AfxMessageBox(szErr);
+		return -1;
+	}
+	//IDP_FreeImageLayer(-1);
+	PrtBuffNum = 0;
+	for(int n=0;n<pdlg->m_nJobImgLayerCnts;n++)
+	{
+		for (int i = 0; i < g_PrtImgLayer.nColorCnts; i++) 
+		{
+
+			pBmpFile[i] = pdlg->m_pPrtData[i];	//仅将图层数据区域传入
+
+		}
+		pLayer->nLayerIndex=n;
+		pLayer->nValidClrMask = 0xFFFF;
+		//pLayer->nDeviceIndex = RYMotherboardId;
+		::OutputDebugString(_T("[RYZ] Start writeImgLayer"));
+		//clock_t Start2 = clock();
+
+		/*
+		int  IDP_WriteImgLayerData(LPPRTIMG_LAYER lpLayerInfo,unsigned char* pSrcBuf[],int nBytes)
+		返回值定义
+		1            正常返回
+		0             已存在的图层
+		-110001  图层数据为空
+		-110002  图层序号不满足增量关系
+		-110004 PC内存不足
+		-110005 图预处理错误
+		*/
+		//mtx.lock();
+		if(PrtBuffNum < 5)
+		{
+			PrtBuffNum++;
+			WaitForSingleObject(g_PrtMutex,INFINITE);
+			Result = IDP_WriteImgLayerData(pLayer, pBmpFile, pdlg->m_nPrtDataSize);	//开始传图 ，实时返回
+			ReleaseMutex(g_PrtMutex);			
+			if(Result != 1)
+			{
+				AfxMessageBox("111111");
+			}
+
+			
+		}else
+		{
+			while(PrtBuffNum >= 5){
+				
+				Sleep(1);
+	
+			}
+			n--;
+		}
+		
+	}
+	AfxEndThread(0, TRUE);
+
+}
+
+bool teststtt = false;
+using namespace std;
+
+
+#define DP0(fmt) {TCHAR sOut[256];_stprintf_s(sOut,_T(fmt));OutputDebugString(sOut);} 
+UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
+{
+	CNetScanDemoDlg* pdlg = (CNetScanDemoDlg*)pvoid;
+	PrtRunInfo	RTinfo;CString szErr;int nPassCount;
+	pdlg->m_bPrinting = true;
+	LPPassDataItem pPrtPassDes;
+	clock_t Start;
+	clock_t End;
+	char buf[1000] = {0};
+	double cpu_time_used = 0;
+	int nMovBuf = MM_TO_DOT(g_movConfig.fMovBuf, g_movConfig.fxSysdpi);
+	int nDestPos = 0;
+	int ndistance = 0;
+	int nSpd = MM_TO_DOT(g_movConfig.fxMovSpd, g_movConfig.fxSysdpi);
+	clock_t Start4;
+	clock_t Start5;
+	for(int n=0;n<pdlg->m_nJobImgLayerCnts;n++)
+	{
+		/*
+		int  IDP_StartLayerPrint(int nLayerIndex);
+		返回值定义：
+		>0  返回PASS总数
+		-1   图层数据未就绪
+		-120000~-120016  初始化失败
+		-121000                   板卡内存分区不足
+		-122000                   启动数据分发线程失败
+		*/
+		while (PrtBuffNum<=0)
+		{
+			Sleep(10);
+		}
+
+		WaitForSingleObject(g_PrtMutex,INFINITE);
+
+		nPassCount = IDP_StartLayerPrint(n);
+
+		while(nPassCount == -1)
+		{
+			nPassCount = IDP_StartLayerPrint(n);
+		}
+
+
+		if(nPassCount>0)
+		{
+			int Lentest = 0;
+			for(int i=0;i<nPassCount;i++)
+			{
+				//Sleep(1000);
+				Start4 = clock();
+				//::OutputDebugString(_T("[RYZ] start IDP_GetPassItem3333333333333333333"));
+				do
+				{
+					//::OutputDebugString(_T("[RY] Start Query Pass!"));
+					pPrtPassDes=::IDP_GetPassItem(n,i);
+					//memset(buf,0,sizeof(buf));
+					//sprintf(buf,"%s %d","[RY] End Query Pass!  ",pPrtPassDes->nProcState);
+					//::OutputDebugString(_T("[RY] End Query Pass!"));
+					if(pPrtPassDes)
+					{
+						if((pPrtPassDes->nProcState>2)&&(pPrtPassDes->nProcState<6))
+						{
+							//3,4,5状态都可以执行打印
+							break;
+						}
+						if(!pdlg->m_bJobStarted)
+						{
+							//作业停止
+							pPrtPassDes=NULL;
+							return -1;
+						}
+					 }
+					Start5 = clock();
+
+					if(Start5 - Start4 >  60 * 1000)
+					{
+						sprintf(buf,"%s %d  %d  %d","pPrtPassDes->nProcState ",pPrtPassDes->nProcState,pPrtPassDes->nLayerIndex,pPrtPassDes->nLayerPassIndex);
+						AfxMessageBox(buf);
+					}
+				}
+				while(1);//等待PASS就绪
+				//::OutputDebugString(_T("[RYZ] end IDP_GetPassItem3333333333333333333"));	
+				if (pPrtPassDes->bIsNullPass)
+					continue;
+				if(pPrtPassDes)
+				{
+					if(0==i)
+					{
+						//第一PASS Y位置定位，
+						//pPrtPassDes->fYMinJetImgPos 为Y起始打印位置里Y零位的距离
+						//MOV_Y(pPrtPassDes->fYMinJetImgPos);
+					}
+					else
+					{
+						//打印之前需要的Y步进量
+                        //MOV_Y（pPrtPassDes->nStpVector ）//um
+#ifdef RY_MOVE_CTL
+						int nYStep = MM_TO_DOT(pPrtPassDes->nStpVector/1000.0, g_movConfig.fySysdpi) * 48;
+						int nSpd = MM_TO_DOT(g_movConfig.fyMovSpd, g_movConfig.fySysdpi) * 48;
+						DEM_MoveY(TRUE,nSpd,nYStep,true,false,g_movConfig.fyMovRate);
+#endif
+
+					}
+					//X打印起始位置
+					//pPrtPassDes->nStartEncPos
+					//打印的运动起点计算
+					//正向打印的运动起点(PrtPassDes->bEncPrtDir:true)： nXPos=pPrtPassDes->nStartEncPos-MovBuf(运动缓冲)
+#ifdef RY_MOVE_CTL
+					if (pPrtPassDes->bEncPrtDir) {
+						nDestPos = (int)pPrtPassDes->nStartEncPos + ZERO_POSITION - nMovBuf;
+						ndistance = nDestPos - DEV_GetPrinterEncValue();
+					}
+					else {
+						nDestPos = (int)pPrtPassDes->nStartEncPos + ZERO_POSITION + nMovBuf;
+						ndistance = nDestPos - DEV_GetPrinterEncValue();
+					}
+					DEM_MoveX(FALSE,nSpd,ndistance,TRUE,g_movConfig.fxMovRate);
+					//反向打印的运动起点(PrtPassDes->bEncPrtDir:false)： nXPos=pPrtPassDes->nStartEncPos+MovBuf(运动缓冲)
+					//X运动长度的计算
+					int nMoveLen = pPrtPassDes->nXPrtColumns * pPrtPassDes->fPrtPrecession + nMovBuf * 2;
+#endif
+
+				    //按X编码计算的运动长度L=pPrtPassDes->nXPrtColumns*pPrtPassDes->fPrtPrecession
+					//********************************
+					//运动起点保证：正向打印时  当前编码位置<nXPos ;反向打印时  当前编码位置>nXPos
+					///::OutputDebugString(_T("[RY] Start pass print#######################################"));
+					teststtt = pPrtPassDes->fYMinJetImgPos;
+					cpu_time_used = static_cast<float>(pPrtPassDes->nStpVector);
+					//sprintf(buf,"%s %f","pPrtPassDes->fYMinJetImgPos ",cpu_time_used);
+					//AfxMessageBox(buf);
+					
+					
+					/*if(i == 4)
+					{
+					sprintf(buf,"%s %f","第5pass累计步进量 =  ",pPrtPassDes->fYMinJetImgPos);
+					AfxMessageBox(buf);
+					}
+					if(i == 5)
+					{
+					sprintf(buf,"%s %f","第6pass累计步进量 =  ",pPrtPassDes->fYMinJetImgPos);
+					AfxMessageBox(buf);
+					}*/
+					//if(i == 4)
+					
+					if(::IDP_DoPassPrint(pPrtPassDes)>0)
+					{
+						//::OutputDebugString(_T("[RY] End pass print######################################"));
+						//当前位置XCURPOS
+						//正向打印的运动长度
+						//负向打印运动目标位置XDEST=nXPos-L-MovBuf
+						//负向打印运动目标位置XDEST=nXPos+L+MovBuf
+						//运动长度 MOV_X(XDEST-XCURPOS); 启动运动
+#ifdef RY_MOVE_CTL
+						DEM_MoveX(!pPrtPassDes->bEncPrtDir, nSpd, nMoveLen, TRUE, g_movConfig.fxMovRate);
+						// 获取打印状态确认打印停止 prtinfo.nPrtState
+						// IDP_GetPrintState(&prtInfo);
+
+#endif
+					}
+					else
+					{
+						//AfxMessageBox("IDP_DoPassPrint eer");
+						//打印错误停止
+						//break;
+					}
+					::OutputDebugString(_T("[RYZ] end IDP_DoPassPrint 44444444444444444444444"));
+					//if ((pPrtPassDes->nLayerPassCount-1) != pPrtPassDes->nLayerPassIndex)
+					    AfxMessageBox(_T("开始打印"));		
+				}
+			}
+				
+		}
+		else
+		{
+			ReleaseMutex(g_PrtMutex);
+			szErr.Format(_T("图层处理错误。错误号：%d"), nPassCount);
+			AfxMessageBox(szErr);
+			//IDP_FreeImageLayer(-1);
+			break;
+		}
+		ReleaseMutex(g_PrtMutex);
+		IDP_FreeImageLayer(n);
+		PrtBuffNum--;
+	} //end for
+	AfxMessageBox(_T("打印完成"));
+	::IDP_StopPrintJob();
+	IDP_FreeImageLayer(-1);
+	CloseHandle(g_PrtMutex);
+	//DEV_GetPrinterEncValue() - 0x10000;
+#ifdef RY_MOVE_CTL
+	DEM_MoveX(FALSE, nSpd, ndistance, TRUE, g_movConfig.fxMovRate);
+#endif
+
+	pdlg->m_bPrinting = false;
+	pdlg->m_bJobStarted=false;//notify windows
+	pdlg->UpdateButtonState();
+	AfxEndThread(0, TRUE);
+	return 0;
+}
+void CNetScanDemoDlg::UpdateButtonState()
+{
+	//IDP_StopPrintJob();
+	m_bJobStarted = false;
+	CWnd* pWnd=GetDlgItem(IDC_BUTTON_STARTJOB);
+	if(pWnd)
+		pWnd->SetWindowText(m_bJobStarted?_T("结束任务"):_T("启动任务"));
+}
+
+#include "CRelaodWaveDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonReloadwave()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	
+	CReloadWaveDlg dlg;
+	UINT nHeadData[8];
+	CFile file;
+	if (g_pSysInfo) {
+		if (dlg.DoModal() == IDOK) {
+			USES_CONVERSION;
+			int nResult = DEV_ReloadWaveForm((1 << dlg.m_nColorIndex), (1 << dlg.m_nGroupIndex), T2A(dlg.m_szWavePath.GetBuffer(0)));
+			g_IsRoladWave = true;
+			if (nResult < 0)
+			{
+				//g_pSysInfo = DEV_GetDeviceInfo();
+				if ((file.Open(T2A(dlg.m_szWavePath.GetBuffer(0)), CFile::modeRead)<=0))
+				{
+					//delete pDataBuf;
+					//return -1;
+				}
+				file.Read(nHeadData, 8*sizeof(UINT));
+				file.Close();
+				if(nHeadData[5] != g_pSysInfo->nCustomerID)
+				{
+					AfxMessageBox("波形客户号和主板客户号不匹配或者波形设置可读了");
+				}
+
+				CString szErr;
+				szErr.Format(_T("加载波形失败：%d"), nResult);
+				AfxMessageBox(szErr);
+			}
+			else {
+				AfxMessageBox(_T("加载成功"));
+			}
+			
+		}
+	}
+}
+
+#include "CVTSetDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonVtSet()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CVTSetDlg dlg;
+	float fVoltage[33];
+	if (dlg.DoModal() == IDOK) {
+		//while(1)
+		{
+			for (int ph = 0; ph < MAX_PH_CNT;ph++) {
+				if (g_bPHValid[ph]) {
+					fVoltage[0] = g_sysParam.phctl_param[ph].fStdVoltage;
+					CopyMemory(&fVoltage[1], g_sysParam.phctl_param[ph].fVoltage, sizeof(float) * 32);
+					if(!MVT_UpdatePhVoltage(fVoltage, ph))
+					{
+						AfxMessageBox("设置电压失败");
+					}
+					if(!MVT_SetPhStdTemp(g_sysParam.phctl_param[ph].fDestTemp, ph))
+					{
+						AfxMessageBox("设置温度失败");
+					}
+				}
+			}
+			//Sleep(1000);
+		}
+		
+		AfxMessageBox(_T("设置电压温度成功"));
+	}
+}
+
+#include "CAdjParamDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonCali()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CAdjParamDlg dlg;
+	if (dlg.DoModal() == IDOK) {
+		if (!DEV_UpdateParam(&g_sysParam))
+			AfxMessageBox(_T("更新参数失败"));
+		else
+			AfxMessageBox(_T("更新参数成功"));
+	}
+}
+
+#include "CSysParamDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonSysParam()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CSysParamDlg dlg;
+	if (dlg.DoModal() == IDOK) {
+		if (!DEV_UpdateParam(&g_sysParam))
+			AfxMessageBox(_T("更新参数失败"));
+		else
+			AfxMessageBox(_T("更新参数成功"));
+	}
+}
+
+
+void CNetScanDemoDlg::OnBnClickedButtonFlash()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	PrtRunInfo runInfo;
+	//while(1)
+	//{
+		if (IDP_GetPrintState(&runInfo)) {
+
+			BOOL bFlashState = (runInfo.nPrtState == 3);
+			CWnd* pWnd = GetDlgItem(IDC_BUTTON_FLASH);
+			if(!IDP_FlashPrtCtl(!bFlashState))
+			{
+				AfxMessageBox("失败");
+			}
+			if (bFlashState&&pWnd)
+				pWnd->SetWindowText(_T("启动闪喷"));
+			else
+				pWnd->SetWindowText(_T("关闭闪喷"));
+		}
+	//	Sleep(500);
+	//}
+	
+}
+
+
+void CNetScanDemoDlg::OnBnClickedButtonResetEncoder()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	//while(1)
+	//{
+		if(!DEV_ResetPrinterEncValue(ZERO_POSITION))
+		{
+			AfxMessageBox("失败");
+		}
+		//Sleep(1000);
+	//}//
+	
+}
+
+void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
+{
+	// TODO:  如果该控件是 RICHEDIT 控件，它将不
+	// 发送此通知，除非重写 CDialogEx::OnInitDialog()
+	// 函数并调用 CRichEditCtrl().SetEventMask()，
+	// 同时将 ENM_CHANGE 标志“或”运算到掩码中。
+
+	// TODO:  在此添加控件通知处理程序代码
+	UpdateData();
+	CString  szText;
+	m_ImgPreView.ShowPreview(m_szPrtFile);
+	if (m_ImgPreView.m_hBmp)
+	{
+		CWnd* pwnd = GetDlgItem(IDC_STATIC_RIP_INFO);
+		CFile file;
+		BITMAPFILEHEADER   bmpfileheader;
+		BITMAPINFOHEADER   bmpinfoheader;
+		if (file.Open(m_szPrtFile, CFile::modeRead))
+		{
+			file.Read(&bmpfileheader, sizeof(BITMAPFILEHEADER));
+			file.Read(&bmpinfoheader, sizeof(BITMAPINFOHEADER));
+			szText.Format(_T("Width:%d Height:%d\r\n"), bmpinfoheader.biWidth, bmpinfoheader.biHeight);
+			if (bmpinfoheader.biBitCount > 1)
+				szText += _T(" \r\nNot Support!");
+			if (pwnd)
+				pwnd->SetWindowText(szText);
+			file.Close();
+		}
+	}
+	m_bImageLoaded = FALSE;
+}
+
+
+
+void CNetScanDemoDlg::OnDestroy()
+{
+	m_bStopMonitor = TRUE;
+	for(int c=0;c<MAX_COLORS;c++)
+	{
+		///if(m_pPrtData[c])
+		//	delete m_pPrtData[c];
+		//m_pPrtData[c]=NULL;
+	}
+
+	DEV_CloseDevice();
+	CDialogEx::OnDestroy();
+
+	// TODO: 在此处添加消息处理程序代码
+}
+
+#include "CMoveCtlDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonMovctl()
+{
+	// TODO: 在此添加控件通知处理程序代码
+#ifdef RY_MOVE_CTL
+	CMoveCtlDlg dlg;
+	dlg.DoModal();
+#endif
+}
+
+
+#include "CAirInkDialog.h"
+void CNetScanDemoDlg::OnBnClickedButtonAirInk()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CAirInkDialog inkDlg;
+	inkDlg.DoModal();
+}
+
+#include "CAdibCtrlDlg.h"
+void CNetScanDemoDlg::OnBnClickedButtonAdibCtl()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CAdibCtrlDlg adibDlg;
+	adibDlg.DoModal();
+}
+
+
+void CNetScanDemoDlg::OnBnClickedCheckInkWatch()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	UpdateData();
+	if (m_bEnableInkWacth)
+		DEV_EnableInkWatch(TRUE, 0, 0);
+	else
+		DEV_EnableInkWatch(FALSE, 0, 0);
+}
+
+
+void CNetScanDemoDlg::OnBnClickedButton1()
+{
+	
+	// TODO: 在此添加控件通知处理程序代码
+	DEV_GenAllRegReport("D:\\ROYAL\\3DSCAN\\");
+}
+
+
+void CNetScanDemoDlg::OnBnClickedButton3()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CString AppmianRuteTemp = m_szAppPath  + "appmain";
+	char* AppmianRute = (char*)(AppmianRuteTemp.GetBuffer(0));
+	DEV_UpdateAppFile(AppmianRute,0);
+	
+}
+
+
+void CNetScanDemoDlg::OnBnClickedButton4()
+{
+	// TODO: 在此添加控件通知处理程序代码
+	CString AppmianRuteTemp = m_szAppPath  + "soc_system.rbf";
+	char* AppmianRute = (char*)(AppmianRuteTemp.GetBuffer(0));
+	DEV_UpdateFpgaFile(AppmianRute,0);
+	
+}
+
+void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor()
+{
+	// TODO: 在此添加控件通知处理程序代码
+}
