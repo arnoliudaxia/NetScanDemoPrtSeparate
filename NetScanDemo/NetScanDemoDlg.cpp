@@ -358,7 +358,7 @@ void CNetScanDemoDlg::InitSystem()
 		nResult = DEV_DeviceIsConnected();
 		EndTime = clock();
 	//	break;
-		if(EndTime - StartTime > 1000*2)
+		if(EndTime - StartTime > 1000)
 		{
 			AfxMessageBox("°å¿¨³¬Ê±Î´Á¬½Ó");
 			break;
