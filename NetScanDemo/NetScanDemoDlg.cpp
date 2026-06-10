@@ -155,6 +155,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON3, &CNetScanDemoDlg::OnBnClickedButton3)
 	ON_BN_CLICKED(IDC_BUTTON4, &CNetScanDemoDlg::OnBnClickedButton4)
 	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
+	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
 END_MESSAGE_MAP()
 
 
@@ -588,12 +589,11 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 	return 0;
 }
 #include "CPrtJobDlg.h"
+// 启动打印按钮
 void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 {
-	// TODO:在此添加控件通知处理程序代码
 	CString szErr;	
-	if(1)
-	{
+
 		if (g_PrtImgLayer.nImgType == 0) 
 		{
 			int nRet = GetSrcData(m_szPrtFile);
@@ -610,7 +610,7 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 			AfxMessageBox(_T("未加载图像数据"));
 			return;
 		}
-	}
+
 	if (!m_bJobStarted) 
 	{
 		CPrtJobDlg dlg;
@@ -1058,8 +1058,23 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 						//break;
 					}
 					::OutputDebugString(_T("[RYZ] end IDP_DoPassPrint 44444444444444444444444"));
-					//if ((pPrtPassDes->nLayerPassCount-1) != pPrtPassDes->nLayerPassIndex)
-					    AfxMessageBox(_T("开始打印"));		
+
+
+
+					//先等待编码器离开零位，避免初始位置等于ZERO_POSITION时直接进入下一PASS。
+					while (pdlg->m_bJobStarted && DEV_GetPrinterEncValue() <= ZERO_POSITION + 100)
+					{
+						Sleep(1);
+					}
+					//等待编码器回到零位左侧，替代原先每个PASS后的人工确认弹窗。
+					while (pdlg->m_bJobStarted && DEV_GetPrinterEncValue() > ZERO_POSITION)
+					{
+						Sleep(1);
+					}
+					if (!pdlg->m_bJobStarted)
+					{
+						break;
+					}
 				}
 			}
 				
@@ -1067,7 +1082,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		else
 		{
 			ReleaseMutex(g_PrtMutex);
-			szErr.Format(_T("图层处理错误。错误号：%d"), nPassCount);
+			szErr.Format(_T("图层处理错误。错误号：%dd"), nPassCount);
 			AfxMessageBox(szErr);
 			//IDP_FreeImageLayer(-1);
 			break;
@@ -1224,15 +1239,12 @@ void CNetScanDemoDlg::OnBnClickedButtonFlash()
 
 void CNetScanDemoDlg::OnBnClickedButtonResetEncoder()
 {
-	// TODO: 在此添加控件通知处理程序代码
-	//while(1)
-	//{
+
 		if(!DEV_ResetPrinterEncValue(ZERO_POSITION))
 		{
 			AfxMessageBox("失败");
 		}
-		//Sleep(1000);
-	//}//
+
 	
 }
 
@@ -1249,7 +1261,7 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 	m_ImgPreView.ShowPreview(m_szPrtFile);
 	if (m_ImgPreView.m_hBmp)
 	{
-		CWnd* pwnd = GetDlgItem(IDC_STATIC_RIP_INFO);
+		CWnd* pwnd = GetDlgItem(IDC_STATIC_ImageInfo2);
 		CFile file;
 		BITMAPFILEHEADER   bmpfileheader;
 		BITMAPINFOHEADER   bmpinfoheader;
@@ -1353,6 +1365,11 @@ void CNetScanDemoDlg::OnBnClickedButton4()
 }
 
 void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor()
+{
+	// TODO: 在此添加控件通知处理程序代码
+}
+
+void CNetScanDemoDlg::OnStnClickedStaticRipView()
 {
 	// TODO: 在此添加控件通知处理程序代码
 }

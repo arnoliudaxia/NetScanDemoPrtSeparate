@@ -83,4 +83,5 @@ public:
 	afx_msg void OnBnClickedButton3();
 	afx_msg void OnBnClickedButton4();
 	afx_msg void OnBnClickedCheckCloseVtMonitor();
+	afx_msg void OnStnClickedStaticRipView();
 };

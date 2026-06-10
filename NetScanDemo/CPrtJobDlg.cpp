@@ -72,19 +72,11 @@ END_MESSAGE_MAP()
 
 void CPrtJobDlg::OnBnClickedOk()
 {
-	// TODO: 在此添加控件通知处理程序代码
 	UpdateData();
 	g_testJob.nJobID = 0;
-	//CopyMemory(g_testJob.szJobName, m_szJobName, m_szJobName.GetLength());
+
 	g_testJob.fPrtXPos = m_fXPrtPos;
-	//g_testJob.fClipHeight = m_fClipHeight;
-	//g_testJob.fClipWidth = m_fClipWidth;
-	//g_testJob.fOutXdpi = m_fXOutDPI;
-	//g_testJob.fOutYdpi = m_fYOutDPI;
-	//g_testJob.nFileType = m_nFileType;
-	//g_testJob.nOutPixelBits = m_nGrayBits;
-	//GetDlgItemText(IDC_MFCEDITBROWSE, m_szJobFilePath);
-	//CopyMemory(g_testJob.szJobFilePath, m_szJobFilePath, m_szJobFilePath.GetLength());
+
 	g_testJob.nPrtCtl &= ~0xff;
 	if (m_bWhiteJump)
 		g_testJob.nPrtCtl |= 0x1;
@@ -96,12 +88,6 @@ void CPrtJobDlg::OnBnClickedOk()
 		g_testJob.nPrtCtl |= 0x10;
 	if (m_bYMirror)
 		g_testJob.nPrtCtl |= 0x20;
-	if (m_bDoubleYDpi)
-		///g_testJob.nPrtCtl |= 0x40;
-	if(m_bScreenshotPrt)
-	{
-		//g_testJob.nPrtCtl |= 0x80;
-	}
 
 	CDialogEx::OnOK();
 }
