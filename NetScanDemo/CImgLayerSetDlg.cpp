@@ -178,10 +178,27 @@ BOOL CImgLayerSetDlg::OnInitDialog()
 	m_nPassVol = g_PrtImgLayer.nPassVolRate - 1;
 	UpdateData(FALSE);
 
+	if (!m_ToolTip.GetSafeHwnd())
+	{
+		m_ToolTip.Create(this, TTS_ALWAYSTIP);
+	}
 	CWnd* pInkLabel = GetDlgItem(IDC_STATIC25);
-	if (pInkLabel && m_ToolTip.Create(this, TTS_ALWAYSTIP))
+	if (pInkLabel && m_ToolTip.GetSafeHwnd())
 	{
 		m_ToolTip.AddTool(pInkLabel, _T("倍数越高所需要打印 PASS 就越多"));
+	}
+	CWnd* pFeatherLabel = GetDlgItem(IDC_STATIC8);
+	if (pFeatherLabel && m_ToolTip.GetSafeHwnd())
+	{
+		m_ToolTip.AddTool(pFeatherLabel, _T("羽化的作用是使 PASS 衔接的地方过度的更加自然，羽化的等级越高参与羽化的喷嘴数就越多，打印的效率越低"));
+	}
+	CWnd* pGrayBits = GetDlgItem(IDC_CHECK_GRAYBITS);
+	if (pGrayBits && m_ToolTip.GetSafeHwnd())
+	{
+		m_ToolTip.AddTool(pGrayBits, _T("使用灰度的模式打印。灰度模式下两个像素表示一个墨滴大小，在图片数据不变的情况下由 1bit 切换到 2bit 图像 X 向尺寸会缩小一倍。"));
+	}
+	if (m_ToolTip.GetSafeHwnd())
+	{
 		m_ToolTip.Activate(TRUE);
 	}
 
