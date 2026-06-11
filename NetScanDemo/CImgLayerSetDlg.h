@@ -18,6 +18,8 @@ public:
 
 protected:
 	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 支持
+	virtual BOOL PreTranslateMessage(MSG* pMsg);
+	CToolTipCtrl m_ToolTip;
 
 	DECLARE_MESSAGE_MAP()
 public:

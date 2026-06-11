@@ -177,8 +177,24 @@ BOOL CImgLayerSetDlg::OnInitDialog()
 	m_nMulityInk = g_PrtImgLayer.nInkMultication - 1;
 	m_nPassVol = g_PrtImgLayer.nPassVolRate - 1;
 	UpdateData(FALSE);
-	// TODO:  在此添加额外的初始化
+
+	CWnd* pInkLabel = GetDlgItem(IDC_STATIC25);
+	if (pInkLabel && m_ToolTip.Create(this, TTS_ALWAYSTIP))
+	{
+		m_ToolTip.AddTool(pInkLabel, _T("倍数越高所需要打印 PASS 就越多"));
+		m_ToolTip.Activate(TRUE);
+	}
 
 	return TRUE;  // return TRUE unless you set the focus to a control
 				  // 异常: OCX 属性页应返回 FALSE
+}
+
+
+BOOL CImgLayerSetDlg::PreTranslateMessage(MSG* pMsg)
+{
+	if (m_ToolTip.GetSafeHwnd())
+	{
+		m_ToolTip.RelayEvent(pMsg);
+	}
+	return CDialogEx::PreTranslateMessage(pMsg);
 }

@@ -21,6 +21,8 @@ public:
 
 	protected:
 	virtual void DoDataExchange(CDataExchange* pDX);	// DDX/DDV support
+	virtual BOOL PreTranslateMessage(MSG* pMsg);
+	CToolTipCtrl m_ToolTip;
 public:
 	bool m_bJobStarted;
 	bool m_bPrinting;

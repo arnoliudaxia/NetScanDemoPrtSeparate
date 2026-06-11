@@ -321,10 +321,25 @@ BOOL CNetScanDemoDlg::InitDeviceInfo()
 		}
 	}
 	m_ListDrvInfo.m_childTree.Expand(hRoot, TVE_EXPAND);
-	// TODO:  在此添加额外的初始化
+	CWnd* pFilePath = GetDlgItem(IDC_MFC_PRT_FILE_PATH);
+	if (pFilePath && m_ToolTip.Create(this, TTS_ALWAYSTIP))
+	{
+		m_ToolTip.AddTool(pFilePath, _T("文件名需要以 1.bmp 命名。多通道后续按照2.bmp命名"));
+		m_ToolTip.Activate(TRUE);
+	}
 
 	return TRUE;  // return TRUE unless you set the focus to a control
 				  // 异常: OCX 属性页应返回 FALSE
+}
+
+
+BOOL CNetScanDemoDlg::PreTranslateMessage(MSG* pMsg)
+{
+	if (m_ToolTip.GetSafeHwnd())
+	{
+		m_ToolTip.RelayEvent(pMsg);
+	}
+	return CDialogEx::PreTranslateMessage(pMsg);
 }
 
 void CNetScanDemoDlg::InitMoveSys() {
