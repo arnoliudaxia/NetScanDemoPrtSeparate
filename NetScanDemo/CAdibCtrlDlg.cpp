@@ -168,62 +168,18 @@ void CAdibCtrlDlg::UpdateAdibInfo(BOOL bState)
 			lpAdibparam = &_adibSettings;
 
 
-		if((lpAdibparam->nStatus & 0x400))
+		const UINT nSupplyStatusMask[8] = {
+			0x100, 0x200, 0x400, 0x800,
+			0x1000, 0x2000, 0x4000, 0x8000
+		};
+		const UINT nSupplyCommand[8] = {
+			0x100, 0x400, 0x1, 0x2,
+			0x4, 0x8, 0x10, 0x20
+		};
+		for (int i = 0; i < 8; i++)
 		{
-			if(!bLinkstatus)
-			{
-				
-				if(!bClickLinkWin)
-				{
-					bClickLinkWin = true;
-					bLinkstatus = true;
-					nResult = MessageBox("是否继续供墨1", _T("提示"), MB_ICONINFORMATION | IDRETRY);
-					if(nResult == IDYES)
-					{
-						int nIoOption =  0x100;
-						nIoOption |= 0x400;
-						::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL, 0);
-
-						bClickLinkWin = false;
-						bLinkstatus = false;
-					}
-					else
-					{
-						bClickLinkWin = false;
-						bLinkstatus = true;
-					}
-				}
-				
-			}
-		}
-
-		if((lpAdibparam->nStatus & 0x800))
-		{
-			if(!g_bLink2status)
-			{
-
-				if(!g_bClickLink2Win)
-				{
-					g_bClickLink2Win = true;
-					g_bLink2status = true;
-					nResult = MessageBox("是否继续供墨2", _T("提示"), MB_ICONINFORMATION | IDRETRY);
-					if(nResult == IDYES)
-					{
-						int nIoOption =  0x100;
-						nIoOption |= 0x400;
-						::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL, 0);
-
-						g_bClickLink2Win = false;
-						g_bLink2status = false;
-					}
-					else
-					{
-						g_bClickLink2Win = false;
-						g_bLink2status = true;
-					}
-				}
-
-			}
+			if (lpAdibparam->nStatus & nSupplyStatusMask[i])
+				::DEV_AdibControl(&_adibSettings, nSupplyCommand[i], 1, NULL, 0);
 		}
 		
 		
@@ -242,25 +198,6 @@ void CAdibCtrlDlg::UpdateAdibInfo(BOOL bState)
 			m_AdibList.SetItemText(2, i + 1, szInfo);
 		}
 
-		/*if(lpAdibparam->nReverse[0] & 0x200 )
-		{
-		nResult = MessageBox("是否继续供墨1", _T("提示"), MB_ICONINFORMATION | IDRETRY);
-		if(nResult == IDYES)
-		{
-		int nIoOption =  0x100;
-		::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL, 0);
-		}
-
-		}*/
-		/*if(lpAdibparam->nStatus & 0x400)
-		{
-		nResult = MessageBox("是否继续供墨2", _T("提示"), MB_ICONINFORMATION | IDRETRY);
-		if(nResult == IDYES)
-		{
-		int nIoOption =  0x400;
-		::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL, 0);
-		}*/
-		//}
 	}
 	else if (!m_bSetEnable)
 		bLastSet = FALSE;
