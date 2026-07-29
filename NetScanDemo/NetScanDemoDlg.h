@@ -86,4 +86,5 @@ public:
 	afx_msg void OnBnClickedButton4();
 	afx_msg void OnBnClickedCheckCloseVtMonitor();
 	afx_msg void OnStnClickedStaticRipView();
+	afx_msg LRESULT OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam);
 };

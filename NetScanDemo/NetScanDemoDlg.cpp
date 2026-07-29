@@ -12,6 +12,9 @@
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
+
+#define WM_UPDATE_Y_STEP_DISTANCE (WM_APP + 1)
+
 static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
 extern RYUSR_PARAM g_sysParam;
 extern MOV_Config g_movConfig;
@@ -156,6 +159,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON4, &CNetScanDemoDlg::OnBnClickedButton4)
 	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
 	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
+	ON_MESSAGE(WM_UPDATE_Y_STEP_DISTANCE, &CNetScanDemoDlg::OnUpdateYStepDistance)
 END_MESSAGE_MAP()
 
 
@@ -366,7 +370,6 @@ void CNetScanDemoDlg::InitSystem()
 	//char* AppmianRute = (char*)(AppmianRuteTemp.GetBuffer(0));
 	//CString AppmianRute = m_szAppPath  + "appmian";
 	DEV_OpenDevice(m_hWnd, (unsigned char*)(m_szAppPath.GetBuffer(0)));	//(unsigned char*)(LPCTSTR)m_szAppPath
-	nResult = DEV_DeviceIsConnected();
 	StartTime = clock();
 	while (!DEV_DeviceIsConnected())
 	{
@@ -424,6 +427,7 @@ LPRY_EXTFUN_RFIDOpen          RY_RFIDOpen = NULL;
 BOOL CNetScanDemoDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
+	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("Y步进距离: -- mm"));
 	// Add "About..." menu item to system menu.
 
 	// IDM_ABOUTBOX must be in the system command range.
@@ -991,6 +995,10 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 				//::OutputDebugString(_T("[RYZ] end IDP_GetPassItem3333333333333333333"));	
 				if (pPrtPassDes->bIsNullPass)
 					continue;
+				pdlg->PostMessage(
+					WM_UPDATE_Y_STEP_DISTANCE,
+					static_cast<WPARAM>(pPrtPassDes->nValidPassJets),
+					0);
 				if(pPrtPassDes)
 				{
 					if(0==i)
@@ -1388,3 +1396,17 @@ void CNetScanDemoDlg::OnStnClickedStaticRipView()
 {
 	// TODO: 在此添加控件通知处理程序代码
 }
+
+LRESULT CNetScanDemoDlg::OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam);
+	const unsigned int nValidPassJets = static_cast<unsigned int>(wParam);
+	const double fYStepDistance = static_cast<double>(nValidPassJets) / 300.0 * 25.4;
+
+	CString szStepInfo;
+	szStepInfo.Format(_T("Y步进距离: %.3f mm"), fYStepDistance);
+	SetDlgItemText(IDC_STATIC_ImageInfo3, szStepInfo);
+
+	return 0;
+}
+
