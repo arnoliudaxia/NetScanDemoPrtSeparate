@@ -14,6 +14,7 @@
 #endif
 
 #define WM_UPDATE_Y_STEP_DISTANCE (WM_APP + 1)
+#define WM_UPDATE_PASS_COUNT      (WM_APP + 2)
 
 static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
 extern RYUSR_PARAM g_sysParam;
@@ -160,6 +161,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
 	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
 	ON_MESSAGE(WM_UPDATE_Y_STEP_DISTANCE, &CNetScanDemoDlg::OnUpdateYStepDistance)
+	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
 END_MESSAGE_MAP()
 
 
@@ -428,6 +430,7 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
 	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("Y步进距离: -- mm"));
+	SetDlgItemText(IDC_STATIC_ImageInfo4, _T("PASS数量: --"));
 	// Add "About..." menu item to system menu.
 
 	// IDM_ABOUTBOX must be in the system command range.
@@ -952,7 +955,10 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		{
 			nPassCount = IDP_StartLayerPrint(n);
 		}
-
+		pdlg->PostMessage(
+			WM_UPDATE_PASS_COUNT,
+			static_cast<WPARAM>(static_cast<INT_PTR>(nPassCount)),
+			0);
 
 		if(nPassCount>0)
 		{
@@ -1406,6 +1412,18 @@ LRESULT CNetScanDemoDlg::OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam)
 	CString szStepInfo;
 	szStepInfo.Format(_T("Y步进距离: %.3f mm"), fYStepDistance);
 	SetDlgItemText(IDC_STATIC_ImageInfo3, szStepInfo);
+
+	return 0;
+}
+
+LRESULT CNetScanDemoDlg::OnUpdatePassCount(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam);
+	const int nPassCount = static_cast<int>(static_cast<INT_PTR>(wParam));
+
+	CString szPassInfo;
+	szPassInfo.Format(_T("PASS数量: %d"), nPassCount);
+	SetDlgItemText(IDC_STATIC_ImageInfo4, szPassInfo);
 
 	return 0;
 }
