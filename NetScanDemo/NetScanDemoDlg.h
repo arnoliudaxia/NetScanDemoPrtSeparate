@@ -88,4 +88,6 @@ public:
 	afx_msg void OnStnClickedStaticRipView();
 	afx_msg LRESULT OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnUpdatePassCount(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);
+	CString m_szProcessLog;
 };

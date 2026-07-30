@@ -15,6 +15,7 @@
 
 #define WM_UPDATE_Y_STEP_DISTANCE (WM_APP + 1)
 #define WM_UPDATE_PASS_COUNT      (WM_APP + 2)
+#define WM_APPEND_PROCESS_LOG     (WM_APP + 3)
 
 static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
 extern RYUSR_PARAM g_sysParam;
@@ -27,6 +28,20 @@ BOOL g_bPHValid[MAX_PH_CNT] = { 0 };
 LPPRINTER_INFO g_pSysInfo;
 UINT g_nPHType = 0;
 bool g_IsRoladWave = false;
+
+static void WriteProcessLog(CNetScanDemoDlg* pDlg, LPCTSTR pszFormat, ...)
+{
+	if (pDlg == NULL || !::IsWindow(pDlg->GetSafeHwnd()))
+		return;
+	CString szMessage;
+	va_list args;
+	va_start(args, pszFormat);
+	szMessage.FormatV(pszFormat, args);
+	va_end(args);
+	// Synchronous delivery keeps the stack CString valid.
+	pDlg->SendMessage(WM_APPEND_PROCESS_LOG, 0, reinterpret_cast<LPARAM>(&szMessage));
+}
+
 class CAboutDlg : public CDialogEx
 {
 public:
@@ -162,6 +177,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
 	ON_MESSAGE(WM_UPDATE_Y_STEP_DISTANCE, &CNetScanDemoDlg::OnUpdateYStepDistance)
 	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
+	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
 END_MESSAGE_MAP()
 
 
@@ -470,6 +486,7 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 	InitMoveSys();
 #endif
 	InitSystem();
+	WriteProcessLog(this, _T("程序初始化完成，等待打印任务"));
 	// TODO: Add extra initialization here
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
@@ -614,7 +631,9 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 // 启动打印按钮
 void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 {
-	CString szErr;	
+	CString szErr;
+	WriteProcessLog(this, _T("按钮操作：%s"),
+		m_bJobStarted ? _T("停止任务") : _T("启动任务"));	
 
 		if (g_PrtImgLayer.nImgType == 0) 
 		{
@@ -627,6 +646,8 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 				return;
 			}  
 		}
+		WriteProcessLog(this, _T("图片读取结果：数据=%d字节，颜色通道=%d"),
+			m_nPrtDataSize, g_PrtImgLayer.nColorCnts);
 		if(!m_bImageLoaded)
 		{
 			AfxMessageBox(_T("未加载图像数据"));
@@ -647,6 +668,7 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 				GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("停止任务"));
 				g_PrtImgLayer.nLayerIndex = -1;
 				g_PrtMutex = CreateMutex(NULL,FALSE,"Mutex");
+				WriteProcessLog(this, _T("启动打印线程：图层数=%d"), m_nJobImgLayerCnts);
 				AfxBeginThread(PrintThreadSeparate,this);
 				//Sleep(5000);
 				AfxBeginThread(PrintThread,this);
@@ -659,6 +681,7 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 	}
 	else 
 	{
+		WriteProcessLog(this, _T("用户请求停止任务"));
 		IDP_StopPrintJob();
 		m_bJobStarted = false;
 		GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("启动任务"));
@@ -846,9 +869,11 @@ UINT  CNetScanDemoDlg::PrintThreadSeparate(LPVOID pvoid)
 	int n = sizeof(PRTIMG_LAYER);
 	
 
+	WriteProcessLog(pdlg, _T("调用 IDP_SartPrintJob"));
 	::OutputDebugString(_T("[RYZ] Start IDP_SartPrintJob1111111111111111"));
 	int nResult = IDP_SartPrintJob(&g_testJob);
 	::OutputDebugString(_T("[RYZ] end IDP_SartPrintJob1111111111111111"));
+	WriteProcessLog(pdlg, _T("IDP_SartPrintJob 返回=%d"), nResult);
 
 	if (nResult < 0)
 	{
@@ -887,11 +912,15 @@ UINT  CNetScanDemoDlg::PrintThreadSeparate(LPVOID pvoid)
 		{
 			PrtBuffNum++;
 			WaitForSingleObject(g_PrtMutex,INFINITE);
+			WriteProcessLog(pdlg, _T("写入图层%d：数据=%d字节"), n, pdlg->m_nPrtDataSize);
 			Result = IDP_WriteImgLayerData(pLayer, pBmpFile, pdlg->m_nPrtDataSize);	//开始传图 ，实时返回
-			ReleaseMutex(g_PrtMutex);			
+			ReleaseMutex(g_PrtMutex);
+			WriteProcessLog(pdlg, _T("IDP_WriteImgLayerData(图层%d) 返回=%d"), n, Result);			
 			if(Result != 1)
 			{
-				AfxMessageBox("111111");
+				szErr.Format(_T("写入图层失败：图层=%d，错误码=%d"), n, Result);
+				WriteProcessLog(pdlg, _T("错误：%s"), static_cast<LPCTSTR>(szErr));
+				AfxMessageBox(szErr);
 			}
 
 			
@@ -942,19 +971,27 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		-121000                   板卡内存分区不足
 		-122000                   启动数据分发线程失败
 		*/
+		WriteProcessLog(pdlg, _T("等待图层%d进入缓冲区"), n);
 		while (PrtBuffNum<=0)
 		{
 			Sleep(10);
 		}
+		WriteProcessLog(pdlg, _T("图层%d缓冲就绪，开始计算PASS"), n);
 
 		WaitForSingleObject(g_PrtMutex,INFINITE);
 
 		nPassCount = IDP_StartLayerPrint(n);
+		WriteProcessLog(pdlg, _T("IDP_StartLayerPrint(图层%d) 首次返回=%d"), n, nPassCount);
 
+		int nLayerReadyWait = 0;
 		while(nPassCount == -1)
 		{
+			Sleep(1);
 			nPassCount = IDP_StartLayerPrint(n);
+			if (++nLayerReadyWait % 1000 == 0)
+				WriteProcessLog(pdlg, _T("图层%d仍未就绪，等待%d秒"), n, nLayerReadyWait / 1000);
 		}
+		WriteProcessLog(pdlg, _T("图层%d PASS计算结束，返回=%d"), n, nPassCount);
 		pdlg->PostMessage(
 			WM_UPDATE_PASS_COUNT,
 			static_cast<WPARAM>(static_cast<INT_PTR>(nPassCount)),
@@ -998,13 +1035,16 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 					}
 				}
 				while(1);//等待PASS就绪
-				//::OutputDebugString(_T("[RYZ] end IDP_GetPassItem3333333333333333333"));	
+				//::OutputDebugString(_T("[RYZ] end IDP_GetPassItem3333333333333333333"));
+				WriteProcessLog(pdlg, _T("PASS %d/%d就绪：状态=%u，步进=%d um，空=%d"),
+					i + 1, nPassCount, pPrtPassDes->nProcState,
+					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass ? 1 : 0);
 				if (pPrtPassDes->bIsNullPass)
 					continue;
 				pdlg->PostMessage(
 					WM_UPDATE_Y_STEP_DISTANCE,
-					static_cast<WPARAM>(pPrtPassDes->nValidPassJets),
-					0);
+					0,
+					static_cast<LPARAM>(pPrtPassDes->nStpVector));
 				if(pPrtPassDes)
 				{
 					if(0==i)
@@ -1065,7 +1105,9 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 					}*/
 					//if(i == 4)
 					
-					if(::IDP_DoPassPrint(pPrtPassDes)>0)
+					const int nDoPassResult = ::IDP_DoPassPrint(pPrtPassDes);
+					WriteProcessLog(pdlg, _T("IDP_DoPassPrint(PASS %d) 返回=%d"), i + 1, nDoPassResult);
+					if(nDoPassResult>0)
 					{
 						//::OutputDebugString(_T("[RY] End pass print######################################"));
 						//当前位置XCURPOS
@@ -1120,6 +1162,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		IDP_FreeImageLayer(n);
 		PrtBuffNum--;
 	} //end for
+	WriteProcessLog(pdlg, _T("全部图层处理结束，停止打印任务"));
 	AfxMessageBox(_T("打印完成"));
 	::IDP_StopPrintJob();
 	IDP_FreeImageLayer(-1);
@@ -1298,7 +1341,21 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 		{
 			file.Read(&bmpfileheader, sizeof(BITMAPFILEHEADER));
 			file.Read(&bmpinfoheader, sizeof(BITMAPINFOHEADER));
-			szText.Format(_T("Width:%d Height:%d\r\n"), bmpinfoheader.biWidth, bmpinfoheader.biHeight);
+			const long nPixelHeight = bmpinfoheader.biHeight < 0
+				? -bmpinfoheader.biHeight
+				: bmpinfoheader.biHeight;
+			if (g_PrtImgLayer.nYDPI > 0)
+			{
+				const double fYActualHeight =
+					static_cast<double>(nPixelHeight) / g_PrtImgLayer.nYDPI * 25.4;
+				szText.Format(_T("%dx%d Y:%.3fmm"),
+					bmpinfoheader.biWidth, nPixelHeight, fYActualHeight);
+			}
+			else
+			{
+				szText.Format(_T("%dx%d YDPI无效"),
+					bmpinfoheader.biWidth, nPixelHeight);
+			}
 			if (bmpinfoheader.biBitCount > 1)
 				szText += _T(" \r\nNot Support!");
 			if (pwnd)
@@ -1405,9 +1462,9 @@ void CNetScanDemoDlg::OnStnClickedStaticRipView()
 
 LRESULT CNetScanDemoDlg::OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam)
 {
-	UNREFERENCED_PARAMETER(lParam);
-	const unsigned int nValidPassJets = static_cast<unsigned int>(wParam);
-	const double fYStepDistance = static_cast<double>(nValidPassJets) / 300.0 * 25.4;
+	UNREFERENCED_PARAMETER(wParam);
+	const int nStpVector = static_cast<int>(lParam);
+	const double fYStepDistance = static_cast<double>(nStpVector) / 1000.0;
 
 	CString szStepInfo;
 	szStepInfo.Format(_T("Y步进距离: %.3f mm"), fYStepDistance);
@@ -1425,6 +1482,34 @@ LRESULT CNetScanDemoDlg::OnUpdatePassCount(WPARAM wParam, LPARAM lParam)
 	szPassInfo.Format(_T("PASS数量: %d"), nPassCount);
 	SetDlgItemText(IDC_STATIC_ImageInfo4, szPassInfo);
 
+	return 0;
+}
+
+LRESULT CNetScanDemoDlg::OnAppendProcessLog(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(wParam);
+	const CString* pMessage = reinterpret_cast<const CString*>(lParam);
+	if (pMessage == NULL)
+		return 0;
+	SYSTEMTIME timeNow;
+	::GetLocalTime(&timeNow);
+	CString szLine;
+	szLine.Format(_T("[%02u:%02u:%02u.%03u] %s"), timeNow.wHour, timeNow.wMinute,
+		timeNow.wSecond, timeNow.wMilliseconds, static_cast<LPCTSTR>(*pMessage));
+	if (!m_szProcessLog.IsEmpty())
+		m_szProcessLog += _T("\r\n");
+	m_szProcessLog += szLine;
+	while (true)
+	{
+		int nFirst = m_szProcessLog.Find(_T("\r\n"));
+		if (nFirst < 0)
+			break;
+		int nSecond = m_szProcessLog.Find(_T("\r\n"), nFirst + 2);
+		if (nSecond < 0 || m_szProcessLog.Find(_T("\r\n"), nSecond + 2) < 0)
+			break;
+		m_szProcessLog = m_szProcessLog.Mid(nFirst + 2);
+	}
+	SetDlgItemText(IDC_STATIC_1111, m_szProcessLog);
 	return 0;
 }
 
