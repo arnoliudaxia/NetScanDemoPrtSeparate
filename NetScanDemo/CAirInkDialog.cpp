@@ -158,12 +158,12 @@ BOOL CAirInkDialog::OnInitDialog()
 				if(i == 3 && (pSysInfo->nIoState[0] & 0x8))
 				{
 					m_bEnableOut4 = TRUE;
-					pWnd->SetWindowText("关闭J62");
+					pWnd->SetWindowText("关闭J62（压墨）");
 				}
 				if(i == 3 && !(pSysInfo->nIoState[0]& 0x8))
 				{
 					m_bEnableOut4 = FALSE;
-					pWnd->SetWindowText("打开J62");
+					pWnd->SetWindowText("打开J62（压墨）");
 				}
 
 				if(i == 4 && (pSysInfo->nIoState[0] & 0x10))
@@ -391,12 +391,12 @@ void CAirInkDialog::OnBnClickedCheckOut4()
 	if(m_bEnableOut4)
 	{
 		MVT_SetOutPut(0, 0x8, !m_bEnableOut4);
-		pWnd->SetWindowText("打开J62");
+		pWnd->SetWindowText("打开J62（压墨）");
 		m_bEnableOut4 = FALSE;
 	}else
 	{
 		MVT_SetOutPut(0, 0x8, !m_bEnableOut4);
-		pWnd->SetWindowText("关闭J62");
+		pWnd->SetWindowText("关闭J62（压墨）");
 		m_bEnableOut4 = TRUE;
 	}
 }

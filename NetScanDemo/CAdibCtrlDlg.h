@@ -43,6 +43,8 @@ public:
 	BOOL m_bCleanPump1;
 	BOOL m_bCleanHead;
 	BOOL m_bCleanPump2;
+	BOOL m_bStartPushInk;
+	DWORD m_dwPushInkTick;
 	afx_msg void OnBnClickedButtonCleanmode();
 	BOOL m_bIICRead;
 	afx_msg void OnBnClickedButtonCleanPump2();

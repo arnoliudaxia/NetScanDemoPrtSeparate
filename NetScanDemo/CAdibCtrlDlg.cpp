@@ -38,6 +38,8 @@ CAdibCtrlDlg::CAdibCtrlDlg(CWnd* pParent /*=nullptr*/)
 	m_bCleanPump1 = FALSE;
 	m_bCleanHead = FALSE;
 	m_bCleanPump2 = FALSE;
+	m_bStartPushInk = FALSE;
+	m_dwPushInkTick = 0;
 	InitAdibParam();
 }
 
@@ -85,11 +87,6 @@ BOOL CAdibCtrlDlg::OnInitDialog()
 	g_pSysInfo = DEV_GetDeviceInfo();
 	if (g_pSysInfo->nAdibInfo.fAirThreshold > 0.0f)
 		m_fAirHold = g_pSysInfo->nAdibInfo.fAirThreshold;
-	//int test = m_nLnkTime;
-	if(g_pSysInfo->nAdibInfo.fPressInkTime>0)
-	{
-		//m_nLnkTime = g_pSysInfo->nAdibInfo.fPressInkTime;
-	}
 	CDialog::OnInitDialog();
 
 	// TODO:  Add extra initialization here
@@ -238,11 +235,6 @@ void CAdibCtrlDlg::OnApply()
 		_adibSettings.fAirThreshold = m_fAirHold;
 	}
 
-	if(m_nLnkTime > 0)
-	{
-		nIoOption |= 0x10000;
-		_adibSettings.fPressInkTime = m_nLnkTime;
-	}
 	nIoOption |= 0x80000000; // 保存IIC
 	nIoOption |= 0x40000000; // 读取IIC
 	::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL,0);
@@ -281,6 +273,12 @@ void CAdibCtrlDlg::OnBnCheckImport()
 void CAdibCtrlDlg::OnDestroy()
 {
 	KillTimer(0x300);
+	KillTimer(0x301);
+	if (m_bStartPushInk)
+	{
+		MVT_SetOutPut(0, 0x8, FALSE);
+		m_bStartPushInk = FALSE;
+	}
 	::DEV_AdibControl(&_adibSettings, 0xA00, 1, NULL, 0); // 退出界面关闭供墨防止一直供墨
 	CDialog::OnDestroy();
 	m_bSetEnable = TRUE;		//停止查询
@@ -295,6 +293,19 @@ void CAdibCtrlDlg::OnTimer(UINT_PTR nIDEvent)
 	if (0x300 == nIDEvent)
 	{
 		UpdateAdibInfo(m_bComState);
+	}
+	else if (0x301 == nIDEvent)
+	{
+		const DWORD dwPushInkTime = static_cast<DWORD>(m_nLnkTime * 1000.0f);
+		if (!m_bStartPushInk || GetTickCount() - m_dwPushInkTick >= dwPushInkTime)
+		{
+			MVT_SetOutPut(0, 0x8, FALSE);
+			m_bStartPushInk = FALSE;
+			KillTimer(0x301);
+			CWnd* pWnd = GetDlgItem(LNKISOK);
+			if (pWnd != NULL)
+				pWnd->SetWindowText(_T("压墨"));
+		}
 	}
 	CDialog::OnTimer(nIDEvent);
 }
@@ -407,13 +418,35 @@ void CAdibCtrlDlg::OnBnClickedCleanheadidisok()
 
 void CAdibCtrlDlg::OnBnClickedLnkisok()
 {
-	// TODO: 在此添加控件通知处理程序代码
 	if (!UpdateData())
 		return;
-	int nIoOption =  0x10000;
-	//int nIoOption =  0x100;
-	_adibSettings.fPressInkTime = m_nLnkTime;
-	::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL, 0);
+	CWnd* pWnd = GetDlgItem(LNKISOK);
+	if (!m_bStartPushInk)
+	{
+		if (m_nLnkTime <= 0.0f)
+		{
+			AfxMessageBox(_T("压墨时间必须大于0秒"));
+			return;
+		}
+		if (!MVT_SetOutPut(0, 0x8, TRUE))
+		{
+			AfxMessageBox(_T("打开J62压墨输出失败"));
+			return;
+		}
+		m_dwPushInkTick = GetTickCount();
+		m_bStartPushInk = TRUE;
+		SetTimer(0x301, 100, NULL);
+		if (pWnd != NULL)
+			pWnd->SetWindowText(_T("停止压墨"));
+	}
+	else
+	{
+		MVT_SetOutPut(0, 0x8, FALSE);
+		m_bStartPushInk = FALSE;
+		KillTimer(0x301);
+		if (pWnd != NULL)
+			pWnd->SetWindowText(_T("压墨"));
+	}
 }
 
 
