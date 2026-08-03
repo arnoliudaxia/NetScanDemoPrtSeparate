@@ -38,6 +38,10 @@ public:
 	int m_nPrtDataSize;
 	int m_nJobImgLayerCnts;
 	BOOL m_bStopMonitor;
+	volatile LONG m_lStopSocketServer;
+	SOCKET m_hListenSocket;
+	CWinThread* m_pSocketServerThread;
+	BOOL m_bSocketInitialized;
 	BOOL m_bImageLoaded;
 	LPBYTE m_pPrtData[MAX_COLORS];
 
@@ -60,11 +64,15 @@ public:
 	static UINT PrintThreadSeparate(LPVOID pvoid);
 	//static UINT WriteDataThread(LPVOID pvoid);		//添加图层的线程
 	static UINT MonitorThread(LPVOID lpvoid);
+	static UINT SocketServerThread(LPVOID lpvoid);
+	BOOL StartSocketServer();
+	void StopSocketServer();
 	afx_msg void OnBnClickedButtonReloadwave();
 	afx_msg void OnBnClickedButtonVtSet();
 	afx_msg void OnBnClickedButtonCali();
 	afx_msg void OnBnClickedButtonSysParam();
 	afx_msg void OnBnClickedButtonFlash();
+	int ExecuteFlashToggle(BOOL bShowError, BOOL* pBeforeState, BOOL* pAfterState);
 	afx_msg void OnBnClickedButtonResetEncoder();
 	void UpdateButtonState();
 	void UpdatePrtState(const PrtRunInfo& prtInfo);
@@ -89,5 +97,6 @@ public:
 	afx_msg LRESULT OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnUpdatePassCount(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnSocketFlashControl(WPARAM wParam, LPARAM lParam);
 	CString m_szProcessLog;
 };

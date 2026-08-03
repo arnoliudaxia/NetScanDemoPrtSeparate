@@ -15,6 +15,9 @@
 
 #include "targetver.h"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS      // some CString constructors will be explicit
 
 // turns off MFC's hiding of some common and often safely ignored warning messages

@@ -1,13 +1,16 @@
 
 // NetScanDemoDlg.cpp : implementation file
 //
-#include <iostream>
-#include <Windows.h>
 #include "stdafx.h"
+#include <iostream>
+#include <vector>
+#include <string>
 #include "NetScanDemo.h"
 #include "NetScanDemoDlg.h"
 #include "afxdialogex.h"
 #include "../inc/RYPrtCtler.h"
+
+#pragma comment(lib, "Ws2_32.lib")
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -16,6 +19,7 @@
 #define WM_UPDATE_Y_STEP_DISTANCE (WM_APP + 1)
 #define WM_UPDATE_PASS_COUNT      (WM_APP + 2)
 #define WM_APPEND_PROCESS_LOG     (WM_APP + 3)
+#define WM_SOCKET_FLASH_CONTROL   (WM_APP + 4)
 
 static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
 extern RYUSR_PARAM g_sysParam;
@@ -33,15 +37,264 @@ static void WriteProcessLog(CNetScanDemoDlg* pDlg, LPCTSTR pszFormat, ...)
 {
 	if (pDlg == NULL || !::IsWindow(pDlg->GetSafeHwnd()))
 		return;
-	CString szMessage;
+	CString* pMessage = new CString;
 	va_list args;
 	va_start(args, pszFormat);
-	szMessage.FormatV(pszFormat, args);
+	pMessage->FormatV(pszFormat, args);
 	va_end(args);
-	// Synchronous delivery keeps the stack CString valid.
-	pDlg->SendMessage(WM_APPEND_PROCESS_LOG, 0, reinterpret_cast<LPARAM>(&szMessage));
+	if (!pDlg->PostMessage(WM_APPEND_PROCESS_LOG, 0, reinterpret_cast<LPARAM>(pMessage)))
+		delete pMessage;
 }
 
+static const u_short SOCKET_SERVER_PORT = 19090;
+
+struct SocketFlashResult
+{
+	BOOL bBeforeState;
+	BOOL bAfterState;
+	int nError;
+};
+
+BOOL CNetScanDemoDlg::StartSocketServer()
+{
+	if (m_pSocketServerThread != NULL)
+		return TRUE;
+
+	WSADATA wsaData = {};
+	const int nWsaResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (nWsaResult != 0)
+	{
+		WriteProcessLog(this, _T("Socket Server初始化失败：WSAStartup=%d"), nWsaResult);
+		return FALSE;
+	}
+	m_bSocketInitialized = TRUE;
+	InterlockedExchange(&m_lStopSocketServer, 0);
+
+	CWinThread* pThread = AfxBeginThread(SocketServerThread, this,
+		THREAD_PRIORITY_NORMAL, 0, CREATE_SUSPENDED);
+	if (pThread == NULL)
+	{
+		InterlockedExchange(&m_lStopSocketServer, 1);
+		WSACleanup();
+		m_bSocketInitialized = FALSE;
+		WriteProcessLog(this, _T("Socket Server线程创建失败"));
+		return FALSE;
+	}
+	pThread->m_bAutoDelete = FALSE;
+	m_pSocketServerThread = pThread;
+	pThread->ResumeThread();
+	return TRUE;
+}
+
+void CNetScanDemoDlg::StopSocketServer()
+{
+	InterlockedExchange(&m_lStopSocketServer, 1);
+	if (m_pSocketServerThread != NULL)
+	{
+		DWORD dwWaitResult = WaitForSingleObject(m_pSocketServerThread->m_hThread, 3000);
+		if (dwWaitResult == WAIT_TIMEOUT && m_hListenSocket != INVALID_SOCKET)
+		{
+			shutdown(m_hListenSocket, SD_BOTH);
+			closesocket(m_hListenSocket);
+			m_hListenSocket = INVALID_SOCKET;
+			dwWaitResult = WaitForSingleObject(m_pSocketServerThread->m_hThread, 1000);
+		}
+		if (dwWaitResult == WAIT_OBJECT_0)
+		{
+			delete m_pSocketServerThread;
+			m_pSocketServerThread = NULL;
+		}
+	}
+	if (m_bSocketInitialized)
+	{
+		WSACleanup();
+		m_bSocketInitialized = FALSE;
+	}
+}
+
+UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
+{
+	CNetScanDemoDlg* pDlg = static_cast<CNetScanDemoDlg*>(lpvoid);
+	if (pDlg == NULL)
+		return 1;
+
+	SOCKET hListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (hListenSocket == INVALID_SOCKET)
+	{
+		WriteProcessLog(pDlg, _T("Socket Server创建监听Socket失败：%d"), WSAGetLastError());
+		return 1;
+	}
+	pDlg->m_hListenSocket = hListenSocket;
+
+	sockaddr_in serverAddr = {};
+	serverAddr.sin_family = AF_INET;
+	serverAddr.sin_port = htons(SOCKET_SERVER_PORT);
+	serverAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	if (bind(hListenSocket, reinterpret_cast<sockaddr*>(&serverAddr), sizeof(serverAddr)) == SOCKET_ERROR)
+	{
+		WriteProcessLog(pDlg, _T("Socket Server绑定127.0.0.1:%u失败：%d"),
+			SOCKET_SERVER_PORT, WSAGetLastError());
+		closesocket(hListenSocket);
+		pDlg->m_hListenSocket = INVALID_SOCKET;
+		return 1;
+	}
+	if (listen(hListenSocket, SOMAXCONN) == SOCKET_ERROR)
+	{
+		WriteProcessLog(pDlg, _T("Socket Server监听失败：%d"), WSAGetLastError());
+		closesocket(hListenSocket);
+		pDlg->m_hListenSocket = INVALID_SOCKET;
+		return 1;
+	}
+
+	WriteProcessLog(pDlg, _T("Socket Server已启动：127.0.0.1:%u"), SOCKET_SERVER_PORT);
+	std::vector<SOCKET> clientSockets;
+	std::vector<std::string> receiveBuffers;
+	while (InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0)
+	{
+		fd_set readSet;
+		FD_ZERO(&readSet);
+		FD_SET(hListenSocket, &readSet);
+		for (size_t i = 0; i < clientSockets.size(); ++i)
+			FD_SET(clientSockets[i], &readSet);
+
+		timeval timeout = {};
+		timeout.tv_usec = 200000;
+		const int nSelectResult = select(0, &readSet, NULL, NULL, &timeout);
+		if (nSelectResult == SOCKET_ERROR)
+		{
+			if (InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0)
+				WriteProcessLog(pDlg, _T("Socket Server select失败：%d"), WSAGetLastError());
+			break;
+		}
+		if (nSelectResult == 0)
+			continue;
+
+		if (FD_ISSET(hListenSocket, &readSet))
+		{
+			sockaddr_in clientAddr = {};
+			int nAddrLength = sizeof(clientAddr);
+			SOCKET hClientSocket = accept(hListenSocket,
+				reinterpret_cast<sockaddr*>(&clientAddr), &nAddrLength);
+			if (hClientSocket != INVALID_SOCKET)
+			{
+				if (clientSockets.size() >= FD_SETSIZE - 1)
+				{
+					WriteProcessLog(pDlg, _T("Socket客户端连接被拒绝：已达到最大连接数"));
+					closesocket(hClientSocket);
+				}
+				else
+				{
+					clientSockets.push_back(hClientSocket);
+					receiveBuffers.push_back(std::string());
+					const char szReady[] = "NETSCAN_SERVER_READY\r\n";
+					send(hClientSocket, szReady, sizeof(szReady) - 1, 0);
+					WriteProcessLog(pDlg, _T("Socket客户端已连接：127.0.0.1:%u，当前连接数=%u"),
+						ntohs(clientAddr.sin_port), static_cast<unsigned int>(clientSockets.size()));
+				}
+			}
+		}
+
+		for (size_t i = 0; i < clientSockets.size();)
+		{
+			SOCKET hClientSocket = clientSockets[i];
+			if (!FD_ISSET(hClientSocket, &readSet))
+			{
+				++i;
+				continue;
+			}
+			char szBuffer[1024];
+			const int nReceived = recv(hClientSocket, szBuffer, sizeof(szBuffer), 0);
+			if (nReceived <= 0)
+			{
+				closesocket(hClientSocket);
+				clientSockets.erase(clientSockets.begin() + i);
+				receiveBuffers.erase(receiveBuffers.begin() + i);
+				WriteProcessLog(pDlg, _T("Socket客户端已断开，当前连接数=%u"),
+					static_cast<unsigned int>(clientSockets.size()));
+				continue;
+			}
+			WriteProcessLog(pDlg, _T("Socket收到数据：%d字节"), nReceived);
+			receiveBuffers[i].append(szBuffer, nReceived);
+			if (receiveBuffers[i].size() > 4096)
+			{
+				const char szReply[] = "ERR COMMAND_TOO_LONG\r\n";
+				send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+				receiveBuffers[i].clear();
+				WriteProcessLog(pDlg, _T("Socket命令过长，已丢弃"));
+			}
+			else
+			{
+				size_t nLineEnd = std::string::npos;
+				while ((nLineEnd = receiveBuffers[i].find('\n')) != std::string::npos)
+				{
+					std::string command = receiveBuffers[i].substr(0, nLineEnd);
+					receiveBuffers[i].erase(0, nLineEnd + 1);
+					while (!command.empty() &&
+						(command[command.size() - 1] == '\r' || command[command.size() - 1] == ' ' ||
+						 command[command.size() - 1] == '\t'))
+					{
+						command.erase(command.size() - 1);
+					}
+					if (_stricmp(command.c_str(), "FLASH") == 0)
+					{
+						if (!::IsWindow(pDlg->GetSafeHwnd()))
+						{
+							const char szReply[] = "ERR SERVER_STOPPING\r\n";
+							send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+						}
+						else
+						{
+							SocketFlashResult flashResult = {};
+							pDlg->SendMessage(WM_SOCKET_FLASH_CONTROL, 0,
+								reinterpret_cast<LPARAM>(&flashResult));
+							char szReply[128] = {};
+							if (flashResult.nError == 0)
+							{
+								sprintf_s(szReply, "OK FLASH BEFORE=%s AFTER=%s\r\n",
+									flashResult.bBeforeState ? "ON" : "OFF",
+									flashResult.bAfterState ? "ON" : "OFF");
+							}
+							else if (flashResult.nError == 1)
+							{
+								sprintf_s(szReply,
+									"ERR FLASH GET_STATE_FAILED BEFORE=UNKNOWN AFTER=UNKNOWN\r\n");
+							}
+							else
+							{
+								sprintf_s(szReply, "ERR FLASH CONTROL_FAILED BEFORE=%s AFTER=%s\r\n",
+									flashResult.bBeforeState ? "ON" : "OFF",
+									flashResult.bAfterState ? "ON" : "OFF");
+							}
+							send(hClientSocket, szReply, static_cast<int>(strlen(szReply)), 0);
+						}
+					}
+					else if (!command.empty())
+					{
+						const char szReply[] = "ERR UNKNOWN_COMMAND\r\n";
+						send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+						WriteProcessLog(pDlg, _T("Socket收到未知命令"));
+					}
+				}
+			}
+			++i;
+		}
+	}
+
+	for (size_t i = 0; i < clientSockets.size(); ++i)
+	{
+		shutdown(clientSockets[i], SD_BOTH);
+		closesocket(clientSockets[i]);
+	}
+	clientSockets.clear();
+	receiveBuffers.clear();
+	if (pDlg->m_hListenSocket == hListenSocket)
+	{
+		closesocket(hListenSocket);
+		pDlg->m_hListenSocket = INVALID_SOCKET;
+	}
+	WriteProcessLog(pDlg, _T("Socket Server已停止"));
+	return 0;
+}
 class CAboutDlg : public CDialogEx
 {
 public:
@@ -132,6 +385,10 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_bJobStarted = false;
 	m_bPrinting = false;
 	m_bStopMonitor = false;
+	m_lStopSocketServer = 1;
+	m_hListenSocket = INVALID_SOCKET;
+	m_pSocketServerThread = NULL;
+	m_bSocketInitialized = FALSE;
 	m_nPrtRevColumn = 0;
 	m_nPrtEncoderVal = 0;
 	m_nJobImgLayerCnts=1;
@@ -178,6 +435,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_MESSAGE(WM_UPDATE_Y_STEP_DISTANCE, &CNetScanDemoDlg::OnUpdateYStepDistance)
 	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
 	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
+	ON_MESSAGE(WM_SOCKET_FLASH_CONTROL, &CNetScanDemoDlg::OnSocketFlashControl)
 END_MESSAGE_MAP()
 
 
@@ -491,6 +749,7 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 #endif
 	InitSystem();
 	WriteProcessLog(this, _T("程序初始化完成，等待打印任务"));
+	StartSocketServer();
 	// TODO: Add extra initialization here
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
@@ -1304,28 +1563,53 @@ void CNetScanDemoDlg::OnBnClickedButtonSysParam()
 }
 
 
+int CNetScanDemoDlg::ExecuteFlashToggle(BOOL bShowError, BOOL* pBeforeState, BOOL* pAfterState)
+{
+	if (pBeforeState != NULL)
+		*pBeforeState = FALSE;
+	if (pAfterState != NULL)
+		*pAfterState = FALSE;
+
+	PrtRunInfo runInfo = {};
+	if (!IDP_GetPrintState(&runInfo))
+	{
+		WriteProcessLog(this, _T("闪喷控制失败：无法获取当前打印状态"));
+		if (bShowError)
+			AfxMessageBox(_T("获取打印状态失败"));
+		return 1;
+	}
+
+	const BOOL bBeforeState = (runInfo.nPrtState == 3);
+	const BOOL bAfterState = !bBeforeState;
+	if (pBeforeState != NULL)
+		*pBeforeState = bBeforeState;
+	if (pAfterState != NULL)
+		*pAfterState = bBeforeState;
+
+	if (!IDP_FlashPrtCtl(bAfterState))
+	{
+		WriteProcessLog(this, _T("闪喷控制失败：当前=%s，目标=%s"),
+			bBeforeState ? _T("开启") : _T("关闭"),
+			bAfterState ? _T("开启") : _T("关闭"));
+		if (bShowError)
+			AfxMessageBox(_T("闪喷控制失败"));
+		return 2;
+	}
+
+	if (pAfterState != NULL)
+		*pAfterState = bAfterState;
+	CWnd* pWnd = GetDlgItem(IDC_BUTTON_FLASH);
+	if (pWnd != NULL)
+		pWnd->SetWindowText(bAfterState ? _T("关闭闪喷") : _T("启动闪喷"));
+	WriteProcessLog(this, _T("闪喷状态修改成功：%s -> %s"),
+		bBeforeState ? _T("开启") : _T("关闭"),
+		bAfterState ? _T("开启") : _T("关闭"));
+	return 0;
+}
+
 void CNetScanDemoDlg::OnBnClickedButtonFlash()
 {
-	// 闪喷 按钮
-	PrtRunInfo runInfo;
-	//while(1)
-	//{
-		if (IDP_GetPrintState(&runInfo)) {
-
-			BOOL bFlashState = (runInfo.nPrtState == 3);
-			CWnd* pWnd = GetDlgItem(IDC_BUTTON_FLASH);
-			if(!IDP_FlashPrtCtl(!bFlashState))
-			{
-				AfxMessageBox("失败");
-			}
-			if (bFlashState&&pWnd)
-				pWnd->SetWindowText(_T("启动闪喷"));
-			else
-				pWnd->SetWindowText(_T("关闭闪喷"));
-		}
-	//	Sleep(500);
-	//}
-	
+	ExecuteFlashToggle(TRUE, NULL, NULL);
 }
 
 
@@ -1390,6 +1674,7 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 
 void CNetScanDemoDlg::OnDestroy()
 {
+	StopSocketServer();
 	m_bStopMonitor = TRUE;
 	for(int c=0;c<MAX_COLORS;c++)
 	{
@@ -1505,17 +1790,30 @@ LRESULT CNetScanDemoDlg::OnUpdatePassCount(WPARAM wParam, LPARAM lParam)
 	return 0;
 }
 
+LRESULT CNetScanDemoDlg::OnSocketFlashControl(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(wParam);
+	SocketFlashResult* pResult = reinterpret_cast<SocketFlashResult*>(lParam);
+	if (pResult == NULL)
+		return 0;
+	WriteProcessLog(this, _T("主线程执行Socket闪喷命令"));
+	pResult->nError = ExecuteFlashToggle(FALSE,
+		&pResult->bBeforeState, &pResult->bAfterState);
+	return 0;
+}
 LRESULT CNetScanDemoDlg::OnAppendProcessLog(WPARAM wParam, LPARAM lParam)
 {
 	UNREFERENCED_PARAMETER(wParam);
-	const CString* pMessage = reinterpret_cast<const CString*>(lParam);
+	CString* pMessage = reinterpret_cast<CString*>(lParam);
 	if (pMessage == NULL)
 		return 0;
+	CString szMessage = *pMessage;
+	delete pMessage;
 	SYSTEMTIME timeNow;
 	::GetLocalTime(&timeNow);
 	CString szLine;
 	szLine.Format(_T("[%02u:%02u:%02u.%03u] %s"), timeNow.wHour, timeNow.wMinute,
-		timeNow.wSecond, timeNow.wMilliseconds, static_cast<LPCTSTR>(*pMessage));
+		timeNow.wSecond, timeNow.wMilliseconds, static_cast<LPCTSTR>(szMessage));
 	if (!m_szProcessLog.IsEmpty())
 		m_szProcessLog += _T("\r\n");
 	m_szProcessLog += szLine;
