@@ -447,6 +447,10 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 	CDialogEx::OnInitDialog();
 	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("Y步进距离: -- mm"));
 	SetDlgItemText(IDC_STATIC_ImageInfo4, _T("PASS数量: --"));
+	SetDlgItemText(IDC_STATIC_REMAIN_COLS,
+		_T("作业打印运行中: --    当前图层打印完成: --    剩余列数: --\r\n")
+		_T("当前打印图层: --    当前图层PASS总数: --    当前打印PASS: --\r\n")
+		_T("当前数据处理图层: --    当前数据传输图层: --"));
 	// Add "About..." menu item to system menu.
 
 	// IDM_ABOUTBOX must be in the system command range.
@@ -540,20 +544,34 @@ HCURSOR CNetScanDemoDlg::OnQueryDragIcon()
 {
 	return static_cast<HCURSOR>(m_hIcon);
 }
-void CNetScanDemoDlg::UpdatePrtState(UINT nState)
+void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 {
 	//	CWnd* pWnd=(CWnd*)GetDlgItem(IDC_BTN_PRINT);
 	CString szTxt;
-	switch (nState)
+	CString szRunInfo;
+	szRunInfo.Format(
+		_T("作业打印运行中: %s    当前图层打印完成: %s    剩余列数: %u\r\n")
+		_T("当前打印图层: %d    当前图层PASS总数: %d    当前打印PASS: %d\r\n")
+		_T("当前数据处理图层: %d    当前数据传输图层: %d"),
+		prtInfo.bJobPrtRuning ? _T("是") : _T("否"),
+		prtInfo.bLayerPrtIsOver ? _T("是") : _T("否"),
+		prtInfo.nRevPrtCols,
+		prtInfo.nPrintLayerIndex,
+		prtInfo.nLayerPassCount,
+		prtInfo.nPrintPassIndex,
+		prtInfo.nProcLayerIndex,
+		prtInfo.nDTLayerPassIndex);
+	SetDlgItemText(IDC_STATIC_REMAIN_COLS, szRunInfo);
+	switch (prtInfo.nPrtState)
 	{
 	case 0:
 		szTxt.Format(_T("Royal 3DP Demo 当前编码位置：%08X"), m_nPrtEncoderVal);
 		break;
 	case 1:
-		szTxt.Format(_T("打印 剩余列数:%d  当前位置编码:%08X"), m_nPrtRevColumn, m_nPrtEncoderVal);
+		szTxt.Format(_T("打印 当前位置编码:%08X"), m_nPrtEncoderVal);
 		break;
 	case 2:
-		szTxt.Format(_T("暂停 剩余列数:%d  当前位置编码:%08X"), m_nPrtRevColumn, m_nPrtEncoderVal);
+		szTxt.Format(_T("暂停 当前位置编码:%08X"), m_nPrtEncoderVal);
 		break;
 	case 3:
 		szTxt = _T("闪喷");
@@ -567,7 +585,7 @@ void CNetScanDemoDlg::UpdatePrtState(UINT nState)
 
 UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 {
-	PrtRunInfo prtInfo;
+	PrtRunInfo prtInfo = {};
 
 	bool tetetttt = true;
 	UINT  nLastPrtState = 0xFF;
@@ -589,9 +607,11 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 		//DEV_GetPrinterEncValue();
 		//test end
 		 DEV_DeviceIsConnected();
-		if(!IDP_GetPrintState(&prtInfo))
+		if (!IDP_GetPrintState(&prtInfo))
 		{
-			AfxMessageBox("IDP_GetPrintState error");
+			WriteProcessLog(pCtlDlg, _T("IDP_GetPrintState失败，本次状态不更新"));
+			Sleep(100);
+			continue;
 		}
 		if (prtInfo.nPrtState == 0 || prtInfo.nPrtState == 3)
 		{
@@ -619,7 +639,7 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 		pCtlDlg->m_nPrtEncoderVal = DEV_GetPrinterEncValue();
 		if (1)
 		{
-			pCtlDlg->UpdatePrtState(prtInfo.nPrtState);
+			pCtlDlg->UpdatePrtState(prtInfo);
 			nLastPrtState = prtInfo.nPrtState;
 		}
 		Sleep(100);
@@ -1286,7 +1306,7 @@ void CNetScanDemoDlg::OnBnClickedButtonSysParam()
 
 void CNetScanDemoDlg::OnBnClickedButtonFlash()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	// 闪喷 按钮
 	PrtRunInfo runInfo;
 	//while(1)
 	//{

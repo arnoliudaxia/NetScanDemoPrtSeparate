@@ -67,7 +67,7 @@ public:
 	afx_msg void OnBnClickedButtonFlash();
 	afx_msg void OnBnClickedButtonResetEncoder();
 	void UpdateButtonState();
-	void UpdatePrtState(UINT nState);
+	void UpdatePrtState(const PrtRunInfo& prtInfo);
 	afx_msg void OnEnChangeMfcPrtFilePath();
 	int GetSrcData(CString lpSrcFile);
 	afx_msg void OnDestroy();

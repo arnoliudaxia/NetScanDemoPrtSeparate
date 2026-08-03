@@ -21,6 +21,7 @@
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
 LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+#pragma code_page(936)
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -704,6 +705,7 @@ END
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(936)
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -751,6 +753,7 @@ BEGIN
     LTEXT           "Static",IDC_STATIC_ImageInfo2,7,224,130,10
     LTEXT           "Static",IDC_STATIC_ImageInfo3,145,224,95,10
     LTEXT           "Static",IDC_STATIC_ImageInfo4,250,224,75,10
+    LTEXT           "ÔËÐÐ×´Ì¬: --",IDC_STATIC_REMAIN_COLS,18,483,568,32,SS_LEFT | WS_BORDER
 END
 
 
