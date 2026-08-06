@@ -9,6 +9,8 @@
 #include "PicScreen.h"
 //#include<Vector>
 
+struct SocketPressInkRequest;
+
 // CNetScanDemoDlg dialog
 class CNetScanDemoDlg : public CDialogEx
 {
@@ -42,6 +44,9 @@ public:
 	SOCKET m_hListenSocket;
 	CWinThread* m_pSocketServerThread;
 	BOOL m_bSocketInitialized;
+	SocketPressInkRequest* m_pSocketPressInkRequest;
+	DWORD m_dwSocketPressInkStartTick;
+	DWORD m_dwSocketPressInkDuration;
 	BOOL m_bImageLoaded;
 	LPBYTE m_pPrtData[MAX_COLORS];
 
@@ -79,6 +84,7 @@ public:
 	afx_msg void OnEnChangeMfcPrtFilePath();
 	int GetSrcData(CString lpSrcFile);
 	afx_msg void OnDestroy();
+	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	void InitsysParam();
 	void InitSystem();
 	void InitMoveSys();
@@ -98,5 +104,6 @@ public:
 	afx_msg LRESULT OnUpdatePassCount(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnSocketFlashControl(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnSocketPressInkControl(WPARAM wParam, LPARAM lParam);
 	CString m_szProcessLog;
 };

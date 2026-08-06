@@ -20,6 +20,9 @@
 #define WM_UPDATE_PASS_COUNT      (WM_APP + 2)
 #define WM_APPEND_PROCESS_LOG     (WM_APP + 3)
 #define WM_SOCKET_FLASH_CONTROL   (WM_APP + 4)
+#define WM_SOCKET_PRESS_INK_CONTROL (WM_APP + 5)
+
+static const UINT_PTR SOCKET_PRESS_INK_TIMER_ID = 0x1200;
 
 static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
 extern RYUSR_PARAM g_sysParam;
@@ -48,10 +51,19 @@ static void WriteProcessLog(CNetScanDemoDlg* pDlg, LPCTSTR pszFormat, ...)
 
 static const u_short SOCKET_SERVER_PORT = 19090;
 
+static std::string FormatSocketReceivedData(const char* pData, int nLength);
+
 struct SocketFlashResult
 {
 	BOOL bBeforeState;
 	BOOL bAfterState;
+	int nError;
+};
+
+struct SocketPressInkRequest
+{
+	double fSeconds;
+	HANDLE hCompletedEvent;
 	int nError;
 };
 
@@ -213,7 +225,10 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 					static_cast<unsigned int>(clientSockets.size()));
 				continue;
 			}
-			WriteProcessLog(pDlg, _T("Socket收到数据：%d字节"), nReceived);
+			const std::string receivedLog = FormatSocketReceivedData(szBuffer, nReceived);
+			const CString szReceivedLog(receivedLog.c_str());
+			WriteProcessLog(pDlg, _T("Socket收到数据：%d字节，内容：%s"),
+				nReceived, static_cast<LPCTSTR>(szReceivedLog));
 			receiveBuffers[i].append(szBuffer, nReceived);
 			if (receiveBuffers[i].size() > 4096)
 			{
@@ -266,6 +281,72 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 									flashResult.bAfterState ? "ON" : "OFF");
 							}
 							send(hClientSocket, szReply, static_cast<int>(strlen(szReply)), 0);
+						}
+					}
+					else if (_strnicmp(command.c_str(), "PRESS_INK", 9) == 0 &&
+						(command.size() == 9 || command[9] == ' ' || command[9] == '\t'))
+					{
+						double fSeconds = 0.0;
+						char chExtra = 0;
+						const int nFields = sscanf_s(command.c_str(), "PRESS_INK %lf %c",
+							&fSeconds, &chExtra, 1);
+						if (nFields != 1 || !(fSeconds > 0.0) || fSeconds > 3600.0)
+						{
+							const char szReply[] = "ERR PRESS_INK INVALID_TIME RANGE=(0,3600]\r\n";
+							send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+							WriteProcessLog(pDlg, _T("Socket压墨命令参数无效：%S"), command.c_str());
+						}
+						else if (!::IsWindow(pDlg->GetSafeHwnd()))
+						{
+							const char szReply[] = "ERR SERVER_STOPPING\r\n";
+							send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+						}
+						else
+						{
+							SocketPressInkRequest request = {};
+							request.fSeconds = fSeconds;
+							request.nError = 0;
+							request.hCompletedEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+							if (request.hCompletedEvent == NULL)
+							{
+								const char szReply[] = "ERR PRESS_INK INTERNAL_ERROR\r\n";
+								send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+							}
+							else
+							{
+								WriteProcessLog(pDlg, _T("Socket收到压墨命令：%.3f秒"), fSeconds);
+								pDlg->SendMessage(WM_SOCKET_PRESS_INK_CONTROL, 0,
+									reinterpret_cast<LPARAM>(&request));
+								if (request.nError == 0)
+								{
+									const DWORD dwWaitMilliseconds =
+										static_cast<DWORD>(fSeconds * 1000.0) + 5000;
+									if (WaitForSingleObject(request.hCompletedEvent,
+										dwWaitMilliseconds) != WAIT_OBJECT_0)
+									{
+										request.nError = 5;
+										if (::IsWindow(pDlg->GetSafeHwnd()))
+											pDlg->SendMessage(WM_SOCKET_PRESS_INK_CONTROL, 1,
+												reinterpret_cast<LPARAM>(&request));
+									}
+								}
+
+								char szReply[160] = {};
+								if (request.nError == 0)
+									sprintf_s(szReply,
+										"OK PRESS_INK SECONDS=%.3f RESULT=COMPLETED STATE=OFF\r\n",
+										fSeconds);
+								else if (request.nError == 2)
+									sprintf_s(szReply, "ERR PRESS_INK BUSY\r\n");
+								else if (request.nError == 3)
+									sprintf_s(szReply, "ERR PRESS_INK START_FAILED STATE=OFF\r\n");
+								else if (request.nError == 4)
+									sprintf_s(szReply, "ERR PRESS_INK STOP_FAILED STATE=UNKNOWN\r\n");
+								else
+									sprintf_s(szReply, "ERR PRESS_INK TIMEOUT STATE=OFF\r\n");
+								send(hClientSocket, szReply, static_cast<int>(strlen(szReply)), 0);
+								CloseHandle(request.hCompletedEvent);
+							}
 						}
 					}
 					else if (!command.empty())
@@ -389,6 +470,9 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_hListenSocket = INVALID_SOCKET;
 	m_pSocketServerThread = NULL;
 	m_bSocketInitialized = FALSE;
+	m_pSocketPressInkRequest = NULL;
+	m_dwSocketPressInkStartTick = 0;
+	m_dwSocketPressInkDuration = 0;
 	m_nPrtRevColumn = 0;
 	m_nPrtEncoderVal = 0;
 	m_nJobImgLayerCnts=1;
@@ -423,6 +507,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON_RESET_ENCODER, &CNetScanDemoDlg::OnBnClickedButtonResetEncoder)
 	ON_EN_CHANGE(IDC_MFC_PRT_FILE_PATH, &CNetScanDemoDlg::OnEnChangeMfcPrtFilePath)
 	ON_WM_DESTROY()
+	ON_WM_TIMER()
 	ON_BN_CLICKED(IDC_BUTTON_MOVCTL, &CNetScanDemoDlg::OnBnClickedButtonMovctl)
 	ON_BN_CLICKED(IDC_BUTTON_AIR_INK, &CNetScanDemoDlg::OnBnClickedButtonAirInk)
 	ON_BN_CLICKED(IDC_BUTTON_ADIB_CTL, &CNetScanDemoDlg::OnBnClickedButtonAdibCtl)
@@ -436,6 +521,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
 	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
 	ON_MESSAGE(WM_SOCKET_FLASH_CONTROL, &CNetScanDemoDlg::OnSocketFlashControl)
+	ON_MESSAGE(WM_SOCKET_PRESS_INK_CONTROL, &CNetScanDemoDlg::OnSocketPressInkControl)
 END_MESSAGE_MAP()
 
 
@@ -1674,6 +1760,15 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 
 void CNetScanDemoDlg::OnDestroy()
 {
+	if (m_pSocketPressInkRequest != NULL)
+	{
+		KillTimer(SOCKET_PRESS_INK_TIMER_ID);
+		MVT_SetOutPut(0, 0x8, false);
+		m_pSocketPressInkRequest->nError = 5;
+		SetEvent(m_pSocketPressInkRequest->hCompletedEvent);
+		m_pSocketPressInkRequest = NULL;
+		WriteProcessLog(this, _T("程序退出，Socket压墨已停止"));
+	}
 	StopSocketServer();
 	m_bStopMonitor = TRUE;
 	for(int c=0;c<MAX_COLORS;c++)
@@ -1687,6 +1782,50 @@ void CNetScanDemoDlg::OnDestroy()
 	CDialogEx::OnDestroy();
 
 	// TODO: 在此处添加消息处理程序代码
+}
+
+static std::string FormatSocketReceivedData(const char* pData, int nLength)
+{
+	std::string result;
+	result.reserve(static_cast<size_t>(nLength) * 2);
+	for (int i = 0; i < nLength; ++i)
+	{
+		const unsigned char ch = static_cast<unsigned char>(pData[i]);
+		if (ch == '\r')
+			result += "\\r";
+		else if (ch == '\n')
+			result += "\\n";
+		else if (ch == '\t')
+			result += "\\t";
+		else if (ch >= 0x20 && ch <= 0x7E)
+			result += static_cast<char>(ch);
+		else
+		{
+			char szHex[5] = {};
+			sprintf_s(szHex, "\\x%02X", ch);
+			result += szHex;
+		}
+	}
+	return result;
+}
+
+void CNetScanDemoDlg::OnTimer(UINT_PTR nIDEvent)
+{
+	if (nIDEvent == SOCKET_PRESS_INK_TIMER_ID && m_pSocketPressInkRequest != NULL)
+	{
+		if (GetTickCount() - m_dwSocketPressInkStartTick >= m_dwSocketPressInkDuration)
+		{
+			KillTimer(SOCKET_PRESS_INK_TIMER_ID);
+			SocketPressInkRequest* pRequest = m_pSocketPressInkRequest;
+			m_pSocketPressInkRequest = NULL;
+			pRequest->nError = MVT_SetOutPut(0, 0x8, false) ? 0 : 4;
+			WriteProcessLog(this, pRequest->nError == 0
+				? _T("Socket压墨完成：J62已关闭")
+				: _T("Socket压墨结束，但关闭J62失败"));
+			SetEvent(pRequest->hCompletedEvent);
+		}
+	}
+	CDialogEx::OnTimer(nIDEvent);
 }
 
 #include "CMoveCtlDlg.h"
@@ -1799,6 +1938,53 @@ LRESULT CNetScanDemoDlg::OnSocketFlashControl(WPARAM wParam, LPARAM lParam)
 	WriteProcessLog(this, _T("主线程执行Socket闪喷命令"));
 	pResult->nError = ExecuteFlashToggle(FALSE,
 		&pResult->bBeforeState, &pResult->bAfterState);
+	return 0;
+}
+
+LRESULT CNetScanDemoDlg::OnSocketPressInkControl(WPARAM wParam, LPARAM lParam)
+{
+	SocketPressInkRequest* pRequest = reinterpret_cast<SocketPressInkRequest*>(lParam);
+	if (pRequest == NULL)
+		return 0;
+
+	if (wParam == 1)
+	{
+		if (m_pSocketPressInkRequest == pRequest)
+		{
+			KillTimer(SOCKET_PRESS_INK_TIMER_ID);
+			MVT_SetOutPut(0, 0x8, false);
+			m_pSocketPressInkRequest = NULL;
+			WriteProcessLog(this, _T("Socket压墨等待超时，J62已强制关闭"));
+		}
+		return 0;
+	}
+
+	if (m_pSocketPressInkRequest != NULL)
+	{
+		pRequest->nError = 2;
+		WriteProcessLog(this, _T("Socket压墨命令被拒绝：当前正在压墨"));
+		return 0;
+	}
+	if (!MVT_SetOutPut(0, 0x8, true))
+	{
+		pRequest->nError = 3;
+		WriteProcessLog(this, _T("Socket压墨启动失败：无法打开J62"));
+		return 0;
+	}
+
+	m_pSocketPressInkRequest = pRequest;
+	m_dwSocketPressInkStartTick = GetTickCount();
+	m_dwSocketPressInkDuration = static_cast<DWORD>(pRequest->fSeconds * 1000.0);
+	if (SetTimer(SOCKET_PRESS_INK_TIMER_ID, 100, NULL) == 0)
+	{
+		MVT_SetOutPut(0, 0x8, false);
+		m_pSocketPressInkRequest = NULL;
+		pRequest->nError = 3;
+		WriteProcessLog(this, _T("Socket压墨启动失败：无法创建定时器"));
+		return 0;
+	}
+	WriteProcessLog(this, _T("Socket压墨已启动：J62打开，设定时间=%.3f秒"),
+		pRequest->fSeconds);
 	return 0;
 }
 LRESULT CNetScanDemoDlg::OnAppendProcessLog(WPARAM wParam, LPARAM lParam)
