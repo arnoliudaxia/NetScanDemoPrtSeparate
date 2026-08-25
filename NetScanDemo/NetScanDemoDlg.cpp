@@ -5,6 +5,7 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include <objidl.h>
 #include <vector>
 #include <string>
 #include "NetScanDemo.h"
@@ -13,6 +14,7 @@
 #include "../inc/RYPrtCtler.h"
 
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "Ole32.lib")
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -25,6 +27,102 @@
 #define WM_PRINT_JOB_FINISHED     (WM_APP + 6)
 
 static const UINT_PTR SOCKET_PRESS_INK_TIMER_ID = 0x1200;
+
+BEGIN_MESSAGE_MAP(CPngStaticCtrl, CStatic)
+	ON_WM_PAINT()
+END_MESSAGE_MAP()
+
+CPngStaticCtrl::CPngStaticCtrl()
+	: m_nLoadedResourceID(0)
+{
+}
+
+BOOL CPngStaticCtrl::LoadPngResource(UINT nResourceID)
+{
+	if (m_nLoadedResourceID == nResourceID && !m_Image.IsNull())
+		return TRUE;
+
+	m_nLoadedResourceID = 0;
+	if (!m_Image.IsNull())
+		m_Image.Destroy();
+
+	HINSTANCE hResourceInstance = AfxGetResourceHandle();
+	HRSRC hResource = ::FindResource(
+		hResourceInstance, MAKEINTRESOURCE(nResourceID), _T("PNG"));
+	if (hResource == NULL)
+		return FALSE;
+
+	const DWORD nResourceSize = ::SizeofResource(hResourceInstance, hResource);
+	HGLOBAL hLoadedResource = ::LoadResource(hResourceInstance, hResource);
+	const void* pResourceData = hLoadedResource != NULL
+		? ::LockResource(hLoadedResource)
+		: NULL;
+	if (pResourceData == NULL || nResourceSize == 0)
+		return FALSE;
+
+	HGLOBAL hResourceCopy = ::GlobalAlloc(GMEM_MOVEABLE, nResourceSize);
+	if (hResourceCopy == NULL)
+		return FALSE;
+
+	void* pResourceCopy = ::GlobalLock(hResourceCopy);
+	if (pResourceCopy == NULL)
+	{
+		::GlobalFree(hResourceCopy);
+		return FALSE;
+	}
+	::CopyMemory(pResourceCopy, pResourceData, nResourceSize);
+	::GlobalUnlock(hResourceCopy);
+
+	IStream* pStream = NULL;
+	HRESULT hResult = ::CreateStreamOnHGlobal(hResourceCopy, TRUE, &pStream);
+	if (FAILED(hResult))
+	{
+		::GlobalFree(hResourceCopy);
+		return FALSE;
+	}
+
+	hResult = m_Image.Load(pStream);
+	pStream->Release();
+	if (FAILED(hResult))
+	{
+		m_Image.Destroy();
+		return FALSE;
+	}
+
+	m_nLoadedResourceID = nResourceID;
+	Invalidate();
+	return TRUE;
+}
+
+BOOL CPngStaticCtrl::HasImage() const
+{
+	return !m_Image.IsNull();
+}
+
+void CPngStaticCtrl::OnPaint()
+{
+	CPaintDC dc(this);
+	CRect rcClient;
+	GetClientRect(&rcClient);
+	dc.FillSolidRect(&rcClient, ::GetSysColor(COLOR_BTNFACE));
+	if (m_Image.IsNull() || rcClient.IsRectEmpty())
+		return;
+
+	const int nImageWidth = m_Image.GetWidth();
+	const int nImageHeight = m_Image.GetHeight();
+	if (nImageWidth <= 0 || nImageHeight <= 0)
+		return;
+
+	const double fScaleX = static_cast<double>(rcClient.Width()) / nImageWidth;
+	const double fScaleY = static_cast<double>(rcClient.Height()) / nImageHeight;
+	const double fScale = fScaleX < fScaleY ? fScaleX : fScaleY;
+	const int nDrawWidth = static_cast<int>(nImageWidth * fScale + 0.5);
+	const int nDrawHeight = static_cast<int>(nImageHeight * fScale + 0.5);
+	const int nDrawX = (rcClient.Width() - nDrawWidth) / 2;
+	const int nDrawY = (rcClient.Height() - nDrawHeight) / 2;
+	m_Image.Draw(dc.GetSafeHdc(), nDrawX, nDrawY, nDrawWidth, nDrawHeight,
+		0, 0, nImageWidth, nImageHeight);
+}
 
 extern RYUSR_PARAM g_sysParam;
 extern MOV_Config g_movConfig;
@@ -492,6 +590,7 @@ void CNetScanDemoDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_STATIC_VT_INFO, m_ListDrvInfo);
 	DDX_Check(pDX, IDC_CHECK_CLOSE_VT_MONITOR, m_bCloseAutoCheck);
 	DDX_Control(pDX, IDC_STATIC_RIP_VIEW, m_ImgPreView);
+	DDX_Control(pDX, IDC_STATIC_JOB_STATE_IMAGE, m_JobStateImage);
 	DDX_Control(pDX, IDC_MFC_PRT_FILE_PATH, m_PrtFolderBrowse);
 	DDX_Text(pDX, IDC_MFC_PRT_FILE_PATH, m_szPrtFile);
 	DDX_Check(pDX, IDC_CHECK_INK_WATCH, m_bEnableInkWacth);
@@ -794,6 +893,8 @@ LPRY_EXTFUN_RFIDOpen          RY_RFIDOpen = NULL;
 BOOL CNetScanDemoDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
+	m_JobStateImage.LoadPngResource(IDB_PNG1);
+	m_JobStateImage.ShowWindow(SW_HIDE);
 	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("PASS数量: --"));
 	SetDlgItemText(IDC_STATIC_ImageInfo4, _T(""));
 	m_szImageInfo2Base = _T("请选择包含 1\\1.bmp 的打印根文件夹");
@@ -926,6 +1027,10 @@ void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 		prtInfo.nProcLayerIndex,
 		static_cast<LPCTSTR>(szTotalLayers));
 	SetDlgItemText(IDC_STATIC_REMAIN_COLS, szRunInfo);
+	const UINT nJobStateImageResource = prtInfo.bJobPrtRuning ? IDB_PNG1 : IDB_PNG2;
+	const BOOL bJobStateImageLoaded =
+		m_JobStateImage.LoadPngResource(nJobStateImageResource);
+	m_JobStateImage.ShowWindow(bJobStateImageLoaded ? SW_SHOW : SW_HIDE);
 	switch (prtInfo.nPrtState)
 	{
 	case 0:

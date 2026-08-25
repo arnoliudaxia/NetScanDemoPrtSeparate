@@ -7,6 +7,7 @@
 #define _MAX_LAYER_CNT 100
 #include "RyTreeListCtl.h"
 #include "PicScreen.h"
+#include <atlimage.h>
 #include <vector>
 
 struct SocketPressInkRequest;
@@ -19,6 +20,20 @@ struct PrintLayerFolder
 	LONG nHeight;
 	LONG nBytesPerLine;
 	int nDataSize;
+};
+
+class CPngStaticCtrl : public CStatic
+{
+public:
+	CPngStaticCtrl();
+	BOOL LoadPngResource(UINT nResourceID);
+	BOOL HasImage() const;
+
+protected:
+	CImage m_Image;
+	UINT m_nLoadedResourceID;
+	afx_msg void OnPaint();
+	DECLARE_MESSAGE_MAP()
 };
 
 // CNetScanDemoDlg dialog
@@ -46,6 +61,7 @@ public:
 	int m_nPrtEncoderVal;
 	BOOL m_bCloseAutoCheck;
 	CPicScreen m_ImgPreView;
+	CPngStaticCtrl m_JobStateImage;
 	CMFCEditBrowseCtrl m_PrtFolderBrowse;
 	CString m_szPrtFile;
 	int m_nPrtDataSize;
