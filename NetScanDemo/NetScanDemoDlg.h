@@ -7,9 +7,19 @@
 #define _MAX_LAYER_CNT 100
 #include "RyTreeListCtl.h"
 #include "PicScreen.h"
-//#include<Vector>
+#include <vector>
 
 struct SocketPressInkRequest;
+
+struct PrintLayerFolder
+{
+	CString szPath;
+	int nColorCount;
+	LONG nWidth;
+	LONG nHeight;
+	LONG nBytesPerLine;
+	int nDataSize;
+};
 
 // CNetScanDemoDlg dialog
 class CNetScanDemoDlg : public CDialogEx
@@ -36,6 +46,7 @@ public:
 	int m_nPrtEncoderVal;
 	BOOL m_bCloseAutoCheck;
 	CPicScreen m_ImgPreView;
+	CMFCEditBrowseCtrl m_PrtFolderBrowse;
 	CString m_szPrtFile;
 	int m_nPrtDataSize;
 	int m_nJobImgLayerCnts;
@@ -49,6 +60,7 @@ public:
 	DWORD m_dwSocketPressInkDuration;
 	BOOL m_bImageLoaded;
 	LPBYTE m_pPrtData[MAX_COLORS];
+	std::vector<PrintLayerFolder> m_PrintLayers;
 
 	//std::Vector<LPBYTE>  charVector;
 
@@ -66,8 +78,6 @@ public:
 	afx_msg void OnBnClickedButtonStartjob();
 	afx_msg void OnBnClickedButtonLoadimg();
 	static UINT PrintThread(LPVOID pvoid);
-	static UINT PrintThreadSeparate(LPVOID pvoid);
-	//static UINT WriteDataThread(LPVOID pvoid);		//添加图层的线程
 	static UINT MonitorThread(LPVOID lpvoid);
 	static UINT SocketServerThread(LPVOID lpvoid);
 	BOOL StartSocketServer();
@@ -82,7 +92,9 @@ public:
 	void UpdateButtonState();
 	void UpdatePrtState(const PrtRunInfo& prtInfo);
 	afx_msg void OnEnChangeMfcPrtFilePath();
-	int GetSrcData(CString lpSrcFile);
+	BOOL ScanPrintRoot(const CString& szRootPath, CString& szError);
+	BOOL LoadLayerData(const PrintLayerFolder& layer, CString& szError);
+	void FreeLayerData();
 	afx_msg void OnDestroy();
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	void InitsysParam();
@@ -105,5 +117,6 @@ public:
 	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnSocketFlashControl(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnSocketPressInkControl(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnPrintJobFinished(WPARAM wParam, LPARAM lParam);
 	CString m_szProcessLog;
 };

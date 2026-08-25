@@ -96,6 +96,9 @@ void CPrtJobDlg::OnBnClickedOk()
 BOOL CPrtJobDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
+	CWnd* pLayerCount = GetDlgItem(IDC_EDIT_LAYERCNT);
+	if (pLayerCount)
+		pLayerCount->EnableWindow(FALSE); // 图层数由根文件夹中的连续编号子目录自动确定
 	//m_nJobID = g_testJob.nJobID;
 	m_fXPrtPos = g_testJob.fPrtXPos;
 	//m_fClipHeight = g_testJob.fClipHeight;

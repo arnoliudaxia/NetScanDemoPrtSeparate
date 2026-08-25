@@ -3,6 +3,8 @@
 //
 #include "stdafx.h"
 #include <iostream>
+#include <algorithm>
+#include <limits>
 #include <vector>
 #include <string>
 #include "NetScanDemo.h"
@@ -21,10 +23,10 @@
 #define WM_APPEND_PROCESS_LOG     (WM_APP + 3)
 #define WM_SOCKET_FLASH_CONTROL   (WM_APP + 4)
 #define WM_SOCKET_PRESS_INK_CONTROL (WM_APP + 5)
+#define WM_PRINT_JOB_FINISHED     (WM_APP + 6)
 
 static const UINT_PTR SOCKET_PRESS_INK_TIMER_ID = 0x1200;
 
-static HANDLE g_PrtMutex = INVALID_HANDLE_VALUE;
 extern RYUSR_PARAM g_sysParam;
 extern MOV_Config g_movConfig;
 PRTJOB_ITEM g_testJob;
@@ -489,6 +491,7 @@ void CNetScanDemoDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_STATIC_VT_INFO, m_ListDrvInfo);
 	DDX_Check(pDX, IDC_CHECK_CLOSE_VT_MONITOR, m_bCloseAutoCheck);
 	DDX_Control(pDX, IDC_STATIC_RIP_VIEW, m_ImgPreView);
+	DDX_Control(pDX, IDC_MFC_PRT_FILE_PATH, m_PrtFolderBrowse);
 	DDX_Text(pDX, IDC_MFC_PRT_FILE_PATH, m_szPrtFile);
 	DDX_Check(pDX, IDC_CHECK_INK_WATCH, m_bEnableInkWacth);
 }
@@ -522,6 +525,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
 	ON_MESSAGE(WM_SOCKET_FLASH_CONTROL, &CNetScanDemoDlg::OnSocketFlashControl)
 	ON_MESSAGE(WM_SOCKET_PRESS_INK_CONTROL, &CNetScanDemoDlg::OnSocketPressInkControl)
+	ON_MESSAGE(WM_PRINT_JOB_FINISHED, &CNetScanDemoDlg::OnPrintJobFinished)
 END_MESSAGE_MAP()
 
 
@@ -690,7 +694,8 @@ BOOL CNetScanDemoDlg::InitDeviceInfo()
 	CWnd* pFilePath = GetDlgItem(IDC_MFC_PRT_FILE_PATH);
 	if (pFilePath && m_ToolTip.Create(this, TTS_ALWAYSTIP))
 	{
-		m_ToolTip.AddTool(pFilePath, _T("文件名需要以 1.bmp 命名。多通道后续按照2.bmp命名"));
+		m_ToolTip.AddTool(pFilePath,
+			_T("请选择根文件夹。子文件夹按1、2、3...命名；每层图片按1.bmp、2.bmp、3.bmp...命名"));
 		m_ToolTip.Activate(TRUE);
 	}
 
@@ -821,6 +826,7 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 		InitJobInfo();
 	if (pApp->LoadLayerParam() <0)
 		InitImgLayerInfo();
+	m_PrtFolderBrowse.EnableFolderBrowseButton();
 
 	if(pApp->LoadCalibrationParam() < 0)
 	{
@@ -996,51 +1002,49 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 // 启动打印按钮
 void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 {
-	CString szErr;
 	WriteProcessLog(this, _T("按钮操作：%s"),
 		m_bJobStarted ? _T("停止任务") : _T("启动任务"));	
 
-		if (g_PrtImgLayer.nImgType == 0) 
+	if (!m_bJobStarted)
+	{
+		UpdateData(TRUE);
+		if (g_PrtImgLayer.nImgType != 0)
 		{
-			int nRet = GetSrcData(m_szPrtFile);
-			if (nRet < 0) {
-				if (nRet == -1)
-					AfxMessageBox(_T("请先确认图层信息"));
-				else
-				    AfxMessageBox(_T("图片数据未成功加载"));
-				return;
-			}  
-		}
-		WriteProcessLog(this, _T("图片读取结果：数据=%d字节，颜色通道=%d"),
-			m_nPrtDataSize, g_PrtImgLayer.nColorCnts);
-		if(!m_bImageLoaded)
-		{
-			AfxMessageBox(_T("未加载图像数据"));
+			AfxMessageBox(_T("文件夹分层打印仅支持 BMP 图片类型，请先在图层设置中选择 BMP。"));
 			return;
 		}
 
-	if (!m_bJobStarted) 
-	{
+		CString szErr;
+		if (!ScanPrintRoot(m_szPrtFile, szErr))
+		{
+			AfxMessageBox(szErr);
+			return;
+		}
+
+		m_nJobImgLayerCnts = static_cast<int>(m_PrintLayers.size());
+		WriteProcessLog(this, _T("文件夹检查完成：图层数=%d"), m_nJobImgLayerCnts);
+
 		CPrtJobDlg dlg;
 		dlg.m_nImageLayerCount=m_nJobImgLayerCnts;
 		if (dlg.DoModal() == IDOK) 
 		{
-			m_nJobImgLayerCnts=dlg.m_nImageLayerCount;
-			if(m_nJobImgLayerCnts>0)
+			m_bJobStarted = true;
+			m_bImageLoaded = FALSE;
+			m_PrtFolderBrowse.EnableWindow(FALSE);
+			GetDlgItem(IDC_BUTTON_LOADIMG)->EnableWindow(true);
+			GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("停止任务"));
+			g_PrtImgLayer.nLayerIndex = -1;
+			WriteProcessLog(this, _T("启动顺序打印线程：图层数=%d"), m_nJobImgLayerCnts);
+			if (AfxBeginThread(PrintThread,this) == NULL)
 			{
-				m_bJobStarted = true;
-				GetDlgItem(IDC_BUTTON_LOADIMG)->EnableWindow(true);
-				GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("停止任务"));
-				g_PrtImgLayer.nLayerIndex = -1;
-				g_PrtMutex = CreateMutex(NULL,FALSE,"Mutex");
-				WriteProcessLog(this, _T("启动打印线程：图层数=%d"), m_nJobImgLayerCnts);
-				AfxBeginThread(PrintThreadSeparate,this);
-				//Sleep(5000);
-				AfxBeginThread(PrintThread,this);
-				CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
-				if (pApp) {
-					pApp->SaveJobParam();
-				}
+				m_bJobStarted = false;
+				UpdateButtonState();
+				AfxMessageBox(_T("创建打印线程失败。"));
+				return;
+			}
+			CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
+			if (pApp) {
+				pApp->SaveJobParam();
 			}
 		}
 	}
@@ -1053,81 +1057,306 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 	}
 }
 
-int CNetScanDemoDlg::GetSrcData(CString lpSrcFile)
+static BOOL ParsePositiveSequenceName(const CString& szName, int& nValue)
 {
-	CString szFileName;
-	for (int c = 0; c < g_PrtImgLayer.nColorCnts; c++) 
+	if (szName.IsEmpty() || (szName.GetLength() > 1 && szName[0] == _T('0')))
+		return FALSE;
+	for (int i = 0; i < szName.GetLength(); ++i)
 	{
-		int i = 0;
-		int nsl = lpSrcFile.GetLength();
-		TCHAR   TempCh;
-		for (i = nsl - 1; i > 0; i--)
-		{
-			TempCh = lpSrcFile.GetAt(i);
-			if (TempCh == _T('\\'))
-				break;
-		}
-		lpSrcFile = lpSrcFile.Left(i);
-		szFileName.Format(_T("\\%d.bmp"), c+1);
-		lpSrcFile += szFileName;
-		if (lpSrcFile.Find(_T(".bmp")) <= 0)
-			return -4;	//文件格式不符合{
-
-		CFile file;
-		if (!file.Open(lpSrcFile, CFile::modeRead))
-		{
-			return -2;
-		}
-		m_nPrtDataSize = file.GetLength();
-
-		LPBYTE pDataBuf = new BYTE[m_nPrtDataSize + 0x100000];
-		ZeroMemory(pDataBuf, m_nPrtDataSize + 0x100000);
-		file.Read(pDataBuf, m_nPrtDataSize);
-		file.Close();
-		/////////////////处理图层和打印参数
-		BITMAPFILEHEADER* pfheader;
-		BITMAPINFOHEADER* pbmpheader;
-		pfheader = (BITMAPFILEHEADER*)pDataBuf;
-		pbmpheader = (BITMAPINFOHEADER*)(pDataBuf + sizeof(BITMAPFILEHEADER));
-		if (pbmpheader->biBitCount != 1)		//仅支持单点图像
-		{
-			delete pDataBuf;
-			return -3;
-		}
-		int m_nVIDOffset = pfheader->bfOffBits;
-		m_nPrtDataSize -= m_nVIDOffset;		//多通道时，要保证图片大小尺寸一致
-
-		RGBQUAD* pcolor = (RGBQUAD*)(pDataBuf + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
-		COLORREF clrZeroColor = RGB(pcolor[0].rgbRed, pcolor[0].rgbGreen, pcolor[0].rgbBlue);
-		LPBYTE pSrcData = pDataBuf + m_nVIDOffset;
-		if (clrZeroColor == 0)	//数据需要取反 位图属性决定
-		{
-			for (int s = 0; s < m_nPrtDataSize; s++)	//pbmpheader->biSizeImage
-				pSrcData[s] = ~pSrcData[s];
-		}
-		if(m_pPrtData[c])
-		{
-			delete m_pPrtData[c];
-			m_pPrtData[c]=NULL;
-		}
-		m_pPrtData[c] = new BYTE[m_nPrtDataSize + 0x100000];
-		CopyMemory(m_pPrtData[c], pSrcData, m_nPrtDataSize);
-		if(pbmpheader->biSizeImage == 0)
-		{
-			g_PrtImgLayer.nBytesPerLine = (pbmpheader->biWidth+31)/32;	 //每行数据字节数
-		}
-		else
-		{
-			g_PrtImgLayer.nBytesPerLine = pbmpheader->biSizeImage / pbmpheader->biHeight;	 //每行数据字节数
-		}
-		
-		g_PrtImgLayer.nHeight = pbmpheader->biHeight;
-		g_PrtImgLayer.nWidth = pbmpheader->biWidth / g_PrtImgLayer.nGrayBits;
-		delete pDataBuf;
-		m_bImageLoaded=TRUE;
+		if (szName[i] < _T('0') || szName[i] > _T('9'))
+			return FALSE;
 	}
-	g_PrtImgLayer.nLayerIndex = 0;
-	return  g_PrtImgLayer.nLayerIndex;
+
+	const __int64 nParsed = _ttoi64(szName);
+	if (nParsed < 1 || nParsed > (std::numeric_limits<int>::max)())
+		return FALSE;
+	nValue = static_cast<int>(nParsed);
+	return TRUE;
+}
+
+static BOOL ReadBmpMetadata(const CString& szFilePath, LONG& nWidth, LONG& nHeight,
+	LONG& nBytesPerLine, int& nDataSize, CString& szError)
+{
+	CFile file;
+	if (!file.Open(szFilePath, CFile::modeRead | CFile::shareDenyNone))
+	{
+		szError.Format(_T("无法打开图片：\r\n%s"), static_cast<LPCTSTR>(szFilePath));
+		return FALSE;
+	}
+
+	BITMAPFILEHEADER fileHeader = {};
+	BITMAPINFOHEADER infoHeader = {};
+	if (file.Read(&fileHeader, sizeof(fileHeader)) != sizeof(fileHeader) ||
+		file.Read(&infoHeader, sizeof(infoHeader)) != sizeof(infoHeader) ||
+		fileHeader.bfType != 0x4D42 || infoHeader.biSize < sizeof(BITMAPINFOHEADER))
+	{
+		szError.Format(_T("BMP 文件头无效：\r\n%s"), static_cast<LPCTSTR>(szFilePath));
+		return FALSE;
+	}
+	if (infoHeader.biBitCount != 1 || infoHeader.biCompression != BI_RGB)
+	{
+		szError.Format(_T("仅支持未压缩的 1-bit BMP：\r\n%s"), static_cast<LPCTSTR>(szFilePath));
+		return FALSE;
+	}
+	if (infoHeader.biWidth <= 0 || infoHeader.biHeight <= 0)
+	{
+		szError.Format(_T("BMP 宽度和高度必须为正数：\r\n%s"), static_cast<LPCTSTR>(szFilePath));
+		return FALSE;
+	}
+
+	const ULONGLONG nLineBytes =
+		(static_cast<ULONGLONG>(infoHeader.biWidth) + 31ULL) / 32ULL * 4ULL;
+	const ULONGLONG nImageBytes = nLineBytes * static_cast<ULONGLONG>(infoHeader.biHeight);
+	const ULONGLONG nFileLength = file.GetLength();
+	const ULONGLONG nPaletteEnd = sizeof(BITMAPFILEHEADER) +
+		static_cast<ULONGLONG>(infoHeader.biSize) + 2ULL * sizeof(RGBQUAD);
+	if (nLineBytes > static_cast<ULONGLONG>((std::numeric_limits<LONG>::max)()) ||
+		nImageBytes > static_cast<ULONGLONG>((std::numeric_limits<int>::max)()) ||
+		fileHeader.bfOffBits < nPaletteEnd ||
+		static_cast<ULONGLONG>(fileHeader.bfOffBits) + nImageBytes > nFileLength)
+	{
+		szError.Format(_T("BMP 像素数据长度无效或文件不完整：\r\n%s"),
+			static_cast<LPCTSTR>(szFilePath));
+		return FALSE;
+	}
+
+	nWidth = infoHeader.biWidth;
+	nHeight = infoHeader.biHeight;
+	nBytesPerLine = static_cast<LONG>(nLineBytes);
+	nDataSize = static_cast<int>(nImageBytes);
+	return TRUE;
+}
+
+static BOOL InspectLayerFolder(const CString& szFolderPath, int nLayerNumber,
+	PrintLayerFolder& layer, CString& szError)
+{
+	std::vector<int> bmpNumbers;
+	CFileFind finder;
+	BOOL bWorking = finder.FindFile(szFolderPath + _T("\\*"));
+	while (bWorking)
+	{
+		bWorking = finder.FindNextFile();
+		if (finder.IsDots() || finder.IsDirectory())
+			continue;
+		const CString szName = finder.GetFileName();
+		if (szName.GetLength() < 5 || szName.Right(4).CompareNoCase(_T(".bmp")) != 0)
+			continue;
+
+		int nBmpNumber = 0;
+		if (!ParsePositiveSequenceName(szName.Left(szName.GetLength() - 4), nBmpNumber))
+		{
+			szError.Format(_T("第 %d 层包含未按正整数命名的 BMP：\r\n%s"),
+				nLayerNumber, static_cast<LPCTSTR>(finder.GetFilePath()));
+			return FALSE;
+		}
+		bmpNumbers.push_back(nBmpNumber);
+	}
+	finder.Close();
+
+	if (bmpNumbers.empty())
+	{
+		szError.Format(_T("第 %d 层没有找到 1.bmp。\r\n目录：%s"),
+			nLayerNumber, static_cast<LPCTSTR>(szFolderPath));
+		return FALSE;
+	}
+	std::sort(bmpNumbers.begin(), bmpNumbers.end());
+	if (bmpNumbers.size() > MAX_COLORS)
+	{
+		szError.Format(_T("第 %d 层有 %d 个颜色通道，超过 SDK 上限 %d。"),
+			nLayerNumber, static_cast<int>(bmpNumbers.size()), MAX_COLORS);
+		return FALSE;
+	}
+	for (size_t i = 0; i < bmpNumbers.size(); ++i)
+	{
+		if (bmpNumbers[i] != static_cast<int>(i) + 1)
+		{
+			szError.Format(_T("第 %d 层的 BMP 序号不连续，应从 1.bmp 开始依次递增。"),
+				nLayerNumber);
+			return FALSE;
+		}
+	}
+
+	layer.szPath = szFolderPath;
+	layer.nColorCount = static_cast<int>(bmpNumbers.size());
+	layer.nWidth = 0;
+	layer.nHeight = 0;
+	layer.nBytesPerLine = 0;
+	layer.nDataSize = 0;
+	for (int i = 0; i < layer.nColorCount; ++i)
+	{
+		CString szBmpPath;
+		szBmpPath.Format(_T("%s\\%d.bmp"), static_cast<LPCTSTR>(szFolderPath), i + 1);
+		LONG nWidth = 0;
+		LONG nHeight = 0;
+		LONG nBytesPerLine = 0;
+		int nDataSize = 0;
+		if (!ReadBmpMetadata(szBmpPath, nWidth, nHeight, nBytesPerLine, nDataSize, szError))
+			return FALSE;
+
+		if (i == 0)
+		{
+			layer.nWidth = nWidth;
+			layer.nHeight = nHeight;
+			layer.nBytesPerLine = nBytesPerLine;
+			layer.nDataSize = nDataSize;
+		}
+		else if (nWidth != layer.nWidth || nHeight != layer.nHeight)
+		{
+			szError.Format(
+				_T("第 %d 层图片尺寸不一致。\r\n1.bmp：%ld x %ld\r\n%d.bmp：%ld x %ld"),
+				nLayerNumber, layer.nWidth, layer.nHeight,
+				i + 1, nWidth, nHeight);
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+BOOL CNetScanDemoDlg::ScanPrintRoot(const CString& szRootPath, CString& szError)
+{
+	m_PrintLayers.clear();
+	CString szRoot = szRootPath;
+	szRoot.Trim();
+	while (szRoot.GetLength() > 3 &&
+		(szRoot.Right(1) == _T("\\") || szRoot.Right(1) == _T("/")))
+		szRoot = szRoot.Left(szRoot.GetLength() - 1);
+
+	const DWORD dwAttributes = GetFileAttributes(szRoot);
+	if (szRoot.IsEmpty() || dwAttributes == INVALID_FILE_ATTRIBUTES ||
+		!(dwAttributes & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		szError = _T("请选择有效的打印根文件夹。");
+		return FALSE;
+	}
+
+	std::vector<int> folderNumbers;
+	CFileFind finder;
+	BOOL bWorking = finder.FindFile(szRoot + _T("\\*"));
+	while (bWorking)
+	{
+		bWorking = finder.FindNextFile();
+		if (finder.IsDots() || !finder.IsDirectory())
+			continue;
+		int nFolderNumber = 0;
+		if (ParsePositiveSequenceName(finder.GetFileName(), nFolderNumber))
+			folderNumbers.push_back(nFolderNumber);
+	}
+	finder.Close();
+
+	if (folderNumbers.empty())
+	{
+		szError = _T("根文件夹中没有找到编号为 1 的图层子文件夹。");
+		return FALSE;
+	}
+	std::sort(folderNumbers.begin(), folderNumbers.end());
+	for (size_t i = 0; i < folderNumbers.size(); ++i)
+	{
+		if (folderNumbers[i] != static_cast<int>(i) + 1)
+		{
+			szError = _T("图层子文件夹序号不连续，应从 1 开始按 1、2、3...依次递增。");
+			return FALSE;
+		}
+	}
+
+	for (size_t i = 0; i < folderNumbers.size(); ++i)
+	{
+		CString szLayerPath;
+		szLayerPath.Format(_T("%s\\%d"), static_cast<LPCTSTR>(szRoot), folderNumbers[i]);
+		PrintLayerFolder layer = {};
+		if (!InspectLayerFolder(szLayerPath, folderNumbers[i], layer, szError))
+		{
+			m_PrintLayers.clear();
+			return FALSE;
+		}
+		m_PrintLayers.push_back(layer);
+	}
+	return TRUE;
+}
+
+void CNetScanDemoDlg::FreeLayerData()
+{
+	for (int i = 0; i < MAX_COLORS; ++i)
+	{
+		delete[] m_pPrtData[i];
+		m_pPrtData[i] = NULL;
+	}
+	m_bImageLoaded = FALSE;
+}
+
+BOOL CNetScanDemoDlg::LoadLayerData(const PrintLayerFolder& layer, CString& szError)
+{
+	FreeLayerData();
+	for (int i = 0; i < layer.nColorCount; ++i)
+	{
+		CString szBmpPath;
+		szBmpPath.Format(_T("%s\\%d.bmp"), static_cast<LPCTSTR>(layer.szPath), i + 1);
+		LONG nWidth = 0;
+		LONG nHeight = 0;
+		LONG nBytesPerLine = 0;
+		int nDataSize = 0;
+		if (!ReadBmpMetadata(szBmpPath, nWidth, nHeight, nBytesPerLine, nDataSize, szError))
+		{
+			FreeLayerData();
+			return FALSE;
+		}
+		if (nWidth != layer.nWidth || nHeight != layer.nHeight ||
+			nBytesPerLine != layer.nBytesPerLine || nDataSize != layer.nDataSize)
+		{
+			szError.Format(_T("打印前检测到图片尺寸发生变化：\r\n%s"),
+				static_cast<LPCTSTR>(szBmpPath));
+			FreeLayerData();
+			return FALSE;
+		}
+		CFile file;
+		if (!file.Open(szBmpPath, CFile::modeRead | CFile::shareDenyNone))
+		{
+			szError.Format(_T("打印前无法重新打开图片：\r\n%s"), static_cast<LPCTSTR>(szBmpPath));
+			FreeLayerData();
+			return FALSE;
+		}
+
+		BITMAPFILEHEADER fileHeader = {};
+		BITMAPINFOHEADER infoHeader = {};
+		RGBQUAD zeroColor = {};
+		if (file.Read(&fileHeader, sizeof(fileHeader)) != sizeof(fileHeader) ||
+			file.Read(&infoHeader, sizeof(infoHeader)) != sizeof(infoHeader))
+		{
+			szError.Format(_T("打印前读取 BMP 文件头失败：\r\n%s"), static_cast<LPCTSTR>(szBmpPath));
+			FreeLayerData();
+			return FALSE;
+		}
+		file.Seek(sizeof(BITMAPFILEHEADER) + infoHeader.biSize, CFile::begin);
+		if (file.Read(&zeroColor, sizeof(zeroColor)) != sizeof(zeroColor))
+		{
+			szError.Format(_T("打印前读取 BMP 调色板失败：\r\n%s"), static_cast<LPCTSTR>(szBmpPath));
+			FreeLayerData();
+			return FALSE;
+		}
+
+		m_pPrtData[i] = new BYTE[layer.nDataSize];
+		file.Seek(fileHeader.bfOffBits, CFile::begin);
+		if (file.Read(m_pPrtData[i], layer.nDataSize) != static_cast<UINT>(layer.nDataSize))
+		{
+			szError.Format(_T("打印前读取 BMP 像素数据失败：\r\n%s"), static_cast<LPCTSTR>(szBmpPath));
+			FreeLayerData();
+			return FALSE;
+		}
+
+		if (RGB(zeroColor.rgbRed, zeroColor.rgbGreen, zeroColor.rgbBlue) == 0)
+		{
+			for (int n = 0; n < layer.nDataSize; ++n)
+				m_pPrtData[i][n] = ~m_pPrtData[i][n];
+		}
+	}
+
+	m_nPrtDataSize = layer.nDataSize;
+	g_PrtImgLayer.nColorCnts = layer.nColorCount;
+	g_PrtImgLayer.nBytesPerLine = layer.nBytesPerLine;
+	g_PrtImgLayer.nHeight = layer.nHeight;
+	g_PrtImgLayer.nWidth = layer.nWidth / g_PrtImgLayer.nGrayBits;
+	g_PrtImgLayer.nValidClrMask = (1U << layer.nColorCount) - 1U;
+	m_bImageLoaded = TRUE;
+	return TRUE;
 }
 #include "CImgLayerSetDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
@@ -1154,156 +1383,6 @@ void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
 **********************************************/
 
 
-#define MAXSIZE 5
-
-/*循环队列的顺序存储结构*/
-typedef struct
-{
-	int nLayerIndex;//起始图层序号
-	//int nPrtNum;
-	int front;    //头指针
-	int rear;    //尾指针
-}SeQueue;
-SeQueue PrtQue;
-
-/*初始化一个空队列*/
-int Init_SeQueue(SeQueue *Q)
-{
-	//Q=(SeQueue *)malloc(sizeof(SeQueue));
-	//if(Q!=NULL)
-	{
-		Q->front=0;
-		Q->rear=0;
-		Q->nLayerIndex = 0;
-		//Q->nPrtNum =0;
-	}
-	return 1;
-}
-
-
-
-/*判空*/
-int SeQueue_Empty(SeQueue *Q)
-{
-	return Q->rear==Q->front;
-}
-
-/*判满*/
-int SeQueue_Full(SeQueue *Q)
-{
-	return (Q->rear+1)%MAXSIZE==Q->front;
-}
-
-/*入队操作*/
-int Enter_SeQueue(SeQueue *Q)
-{
-	if(SeQueue_Full(Q))
-	{
-		return 0;
-	}
-	Q->nLayerIndex++;
-	Q->rear=(Q->rear+1)%MAXSIZE;
-	return 1;
-}
-
-/*出队操作*/
-int Delete_SeQueue(SeQueue *Q)
-{
-	if(SeQueue_Empty(Q))
-	{
-		return 0;
-	}
-
-	Q->front=(Q->front+1)%MAXSIZE;
-	return 1;
-}
-
-
-
-
-
-int PrtBuffNum = 0;
-
-UINT  CNetScanDemoDlg::PrintThreadSeparate(LPVOID pvoid)
-{
-	CNetScanDemoDlg* pdlg = (CNetScanDemoDlg*)pvoid;
-	CString szErr;
-	int Result;
-	LPBYTE pBmpFile[MAX_COLORS];
-	LPPRTIMG_LAYER pLayer = &g_PrtImgLayer;
-	int n = sizeof(PRTIMG_LAYER);
-	
-
-	WriteProcessLog(pdlg, _T("调用 IDP_SartPrintJob"));
-	::OutputDebugString(_T("[RYZ] Start IDP_SartPrintJob1111111111111111"));
-	int nResult = IDP_SartPrintJob(&g_testJob);
-	::OutputDebugString(_T("[RYZ] end IDP_SartPrintJob1111111111111111"));
-	WriteProcessLog(pdlg, _T("IDP_SartPrintJob 返回=%d"), nResult);
-
-	if (nResult < 0)
-	{
-		szErr.Format(_T("启动任务失败，错误号为：%d"), nResult);
-		AfxMessageBox(szErr);
-		return -1;
-	}
-	//IDP_FreeImageLayer(-1);
-	PrtBuffNum = 0;
-	for(int n=0;n<pdlg->m_nJobImgLayerCnts;n++)
-	{
-		for (int i = 0; i < g_PrtImgLayer.nColorCnts; i++) 
-		{
-
-			pBmpFile[i] = pdlg->m_pPrtData[i];	//仅将图层数据区域传入
-
-		}
-		pLayer->nLayerIndex=n;
-		pLayer->nValidClrMask = 0xFFFF;
-		//pLayer->nDeviceIndex = RYMotherboardId;
-		::OutputDebugString(_T("[RYZ] Start writeImgLayer"));
-		//clock_t Start2 = clock();
-
-		/*
-		int  IDP_WriteImgLayerData(LPPRTIMG_LAYER lpLayerInfo,unsigned char* pSrcBuf[],int nBytes)
-		返回值定义
-		1            正常返回
-		0             已存在的图层
-		-110001  图层数据为空
-		-110002  图层序号不满足增量关系
-		-110004 PC内存不足
-		-110005 图预处理错误
-		*/
-		//mtx.lock();
-		if(PrtBuffNum < 5)
-		{
-			PrtBuffNum++;
-			WaitForSingleObject(g_PrtMutex,INFINITE);
-			WriteProcessLog(pdlg, _T("写入图层%d：数据=%d字节"), n, pdlg->m_nPrtDataSize);
-			Result = IDP_WriteImgLayerData(pLayer, pBmpFile, pdlg->m_nPrtDataSize);	//开始传图 ，实时返回
-			ReleaseMutex(g_PrtMutex);
-			WriteProcessLog(pdlg, _T("IDP_WriteImgLayerData(图层%d) 返回=%d"), n, Result);			
-			if(Result != 1)
-			{
-				szErr.Format(_T("写入图层失败：图层=%d，错误码=%d"), n, Result);
-				WriteProcessLog(pdlg, _T("错误：%s"), static_cast<LPCTSTR>(szErr));
-				AfxMessageBox(szErr);
-			}
-
-			
-		}else
-		{
-			while(PrtBuffNum >= 5){
-				
-				Sleep(1);
-	
-			}
-			n--;
-		}
-		
-	}
-	AfxEndThread(0, TRUE);
-
-}
-
 bool teststtt = false;
 using namespace std;
 
@@ -1314,7 +1393,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 	CNetScanDemoDlg* pdlg = (CNetScanDemoDlg*)pvoid;
 	PrtRunInfo	RTinfo;CString szErr;int nPassCount;
 	pdlg->m_bPrinting = true;
-	LPPassDataItem pPrtPassDes;
+	LPPassDataItem pPrtPassDes = NULL;
 	clock_t Start;
 	clock_t End;
 	char buf[1000] = {0};
@@ -1325,8 +1404,57 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 	int nSpd = MM_TO_DOT(g_movConfig.fxMovSpd, g_movConfig.fxSysdpi);
 	clock_t Start4;
 	clock_t Start5;
+	BOOL bAllLayersCompleted = TRUE;
+	WriteProcessLog(pdlg, _T("调用 IDP_SartPrintJob"));
+	const int nStartJobResult = IDP_SartPrintJob(&g_testJob);
+	WriteProcessLog(pdlg, _T("IDP_SartPrintJob 返回=%d"), nStartJobResult);
+	if (nStartJobResult < 0)
+	{
+		szErr.Format(_T("启动任务失败，错误号为：%d"), nStartJobResult);
+		AfxMessageBox(szErr);
+		pdlg->m_bPrinting = false;
+		pdlg->m_bJobStarted = false;
+		pdlg->PostMessage(WM_PRINT_JOB_FINISHED, 0, 0);
+		return -1;
+	}
+
 	for(int n=0;n<pdlg->m_nJobImgLayerCnts;n++)
 	{
+		if (!pdlg->m_bJobStarted)
+		{
+			bAllLayersCompleted = FALSE;
+			break;
+		}
+
+		const PrintLayerFolder& layer = pdlg->m_PrintLayers[n];
+		WriteProcessLog(pdlg, _T("开始读取第%d层：%s"),
+			n + 1, static_cast<LPCTSTR>(layer.szPath));
+		if (!pdlg->LoadLayerData(layer, szErr))
+		{
+			WriteProcessLog(pdlg, _T("第%d层读取失败：%s"), n + 1, static_cast<LPCTSTR>(szErr));
+			AfxMessageBox(szErr);
+			bAllLayersCompleted = FALSE;
+			break;
+		}
+
+		LPBYTE pBmpFile[MAX_COLORS] = {};
+		for (int i = 0; i < layer.nColorCount; ++i)
+			pBmpFile[i] = pdlg->m_pPrtData[i];
+		g_PrtImgLayer.nLayerIndex = n;
+		WriteProcessLog(pdlg, _T("写入第%d层：颜色通道=%d，尺寸=%ldx%ld，数据=%d字节/通道"),
+			n + 1, layer.nColorCount, layer.nWidth, layer.nHeight, layer.nDataSize);
+		const int nWriteResult = IDP_WriteImgLayerData(
+			&g_PrtImgLayer, pBmpFile, pdlg->m_nPrtDataSize);
+		WriteProcessLog(pdlg, _T("IDP_WriteImgLayerData(图层%d) 返回=%d"), n, nWriteResult);
+		if (nWriteResult != 1)
+		{
+			szErr.Format(_T("写入第 %d 层失败，错误码：%d"), n + 1, nWriteResult);
+			AfxMessageBox(szErr);
+			pdlg->FreeLayerData();
+			bAllLayersCompleted = FALSE;
+			break;
+		}
+
 		/*
 		int  IDP_StartLayerPrint(int nLayerIndex);
 		返回值定义：
@@ -1336,25 +1464,24 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		-121000                   板卡内存分区不足
 		-122000                   启动数据分发线程失败
 		*/
-		WriteProcessLog(pdlg, _T("等待图层%d进入缓冲区"), n);
-		while (PrtBuffNum<=0)
-		{
-			Sleep(10);
-		}
-		WriteProcessLog(pdlg, _T("图层%d缓冲就绪，开始计算PASS"), n);
-
-		WaitForSingleObject(g_PrtMutex,INFINITE);
-
+		WriteProcessLog(pdlg, _T("图层%d数据已写入，开始计算PASS"), n);
 		nPassCount = IDP_StartLayerPrint(n);
 		WriteProcessLog(pdlg, _T("IDP_StartLayerPrint(图层%d) 首次返回=%d"), n, nPassCount);
 
 		int nLayerReadyWait = 0;
-		while(nPassCount == -1)
+		while(nPassCount == -1 && pdlg->m_bJobStarted)
 		{
 			Sleep(1);
 			nPassCount = IDP_StartLayerPrint(n);
 			if (++nLayerReadyWait % 1000 == 0)
 				WriteProcessLog(pdlg, _T("图层%d仍未就绪，等待%d秒"), n, nLayerReadyWait / 1000);
+		}
+		if (!pdlg->m_bJobStarted)
+		{
+			IDP_FreeImageLayer(n);
+			pdlg->FreeLayerData();
+			bAllLayersCompleted = FALSE;
+			break;
 		}
 		WriteProcessLog(pdlg, _T("图层%d PASS计算结束，返回=%d"), n, nPassCount);
 		pdlg->PostMessage(
@@ -1388,18 +1515,20 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 						{
 							//作业停止
 							pPrtPassDes=NULL;
-							return -1;
+							break;
 						}
 					 }
 					Start5 = clock();
 
-					if(Start5 - Start4 >  60 * 1000)
+					if(pPrtPassDes && Start5 - Start4 >  60 * 1000)
 					{
 						sprintf(buf,"%s %d  %d  %d","pPrtPassDes->nProcState ",pPrtPassDes->nProcState,pPrtPassDes->nLayerIndex,pPrtPassDes->nLayerPassIndex);
 						AfxMessageBox(buf);
 					}
 				}
 				while(1);//等待PASS就绪
+				if (!pdlg->m_bJobStarted || !pPrtPassDes)
+					break;
 				//::OutputDebugString(_T("[RYZ] end IDP_GetPassItem3333333333333333333"));
 				WriteProcessLog(pdlg, _T("PASS %d/%d就绪：状态=%u，步进=%d um，空=%d"),
 					i + 1, nPassCount, pPrtPassDes->nProcState,
@@ -1517,21 +1646,34 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		}
 		else
 		{
-			ReleaseMutex(g_PrtMutex);
 			szErr.Format(_T("图层处理错误。错误号：%dd"), nPassCount);
 			AfxMessageBox(szErr);
-			//IDP_FreeImageLayer(-1);
+			IDP_FreeImageLayer(n);
+			pdlg->FreeLayerData();
+			bAllLayersCompleted = FALSE;
 			break;
 		}
-		ReleaseMutex(g_PrtMutex);
 		IDP_FreeImageLayer(n);
-		PrtBuffNum--;
+		pdlg->FreeLayerData();
+		WriteProcessLog(pdlg, _T("第%d层打印完成，准备读取下一层"), n + 1);
+		if (!pdlg->m_bJobStarted)
+		{
+			bAllLayersCompleted = FALSE;
+			break;
+		}
 	} //end for
-	WriteProcessLog(pdlg, _T("全部图层处理结束，停止打印任务"));
-	AfxMessageBox(_T("打印完成"));
+	if (bAllLayersCompleted)
+	{
+		WriteProcessLog(pdlg, _T("全部图层处理结束，停止打印任务"));
+		AfxMessageBox(_T("打印完成"));
+	}
+	else
+	{
+		WriteProcessLog(pdlg, _T("打印任务已停止，未处理后续图层"));
+	}
 	::IDP_StopPrintJob();
 	IDP_FreeImageLayer(-1);
-	CloseHandle(g_PrtMutex);
+	pdlg->FreeLayerData();
 	//DEV_GetPrinterEncValue() - 0x10000;
 #ifdef RY_MOVE_CTL
 	DEM_MoveX(FALSE, nSpd, ndistance, TRUE, g_movConfig.fxMovRate);
@@ -1539,10 +1681,19 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 
 	pdlg->m_bPrinting = false;
 	pdlg->m_bJobStarted=false;//notify windows
-	pdlg->UpdateButtonState();
+	pdlg->PostMessage(WM_PRINT_JOB_FINISHED, 0, 0);
 	AfxEndThread(0, TRUE);
 	return 0;
 }
+
+LRESULT CNetScanDemoDlg::OnPrintJobFinished(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(wParam);
+	UNREFERENCED_PARAMETER(lParam);
+	UpdateButtonState();
+	return 0;
+}
+
 void CNetScanDemoDlg::UpdateButtonState()
 {
 	//IDP_StopPrintJob();
@@ -1550,6 +1701,7 @@ void CNetScanDemoDlg::UpdateButtonState()
 	CWnd* pWnd=GetDlgItem(IDC_BUTTON_STARTJOB);
 	if(pWnd)
 		pWnd->SetWindowText(m_bJobStarted?_T("结束任务"):_T("启动任务"));
+	m_PrtFolderBrowse.EnableWindow(TRUE);
 }
 
 #include "CRelaodWaveDlg.h"
@@ -1719,15 +1871,21 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 
 	// TODO:  在此添加控件通知处理程序代码
 	UpdateData();
+	m_PrintLayers.clear();
 	CString  szText;
-	m_ImgPreView.ShowPreview(m_szPrtFile);
+	CString szPreviewFile = m_szPrtFile;
+	while (szPreviewFile.GetLength() > 3 &&
+		(szPreviewFile.Right(1) == _T("\\") || szPreviewFile.Right(1) == _T("/")))
+		szPreviewFile = szPreviewFile.Left(szPreviewFile.GetLength() - 1);
+	szPreviewFile += _T("\\1\\1.bmp");
+	m_ImgPreView.ShowPreview(szPreviewFile);
 	if (m_ImgPreView.m_hBmp)
 	{
 		CWnd* pwnd = GetDlgItem(IDC_STATIC_ImageInfo2);
 		CFile file;
 		BITMAPFILEHEADER   bmpfileheader;
 		BITMAPINFOHEADER   bmpinfoheader;
-		if (file.Open(m_szPrtFile, CFile::modeRead))
+		if (file.Open(szPreviewFile, CFile::modeRead))
 		{
 			file.Read(&bmpfileheader, sizeof(BITMAPFILEHEADER));
 			file.Read(&bmpinfoheader, sizeof(BITMAPINFOHEADER));
@@ -1752,6 +1910,12 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 				pwnd->SetWindowText(szText);
 			file.Close();
 		}
+	}
+	else
+	{
+		CWnd* pwnd = GetDlgItem(IDC_STATIC_ImageInfo2);
+		if (pwnd)
+			pwnd->SetWindowText(_T("请选择包含 1\\1.bmp 的打印根文件夹"));
 	}
 	m_bImageLoaded = FALSE;
 }

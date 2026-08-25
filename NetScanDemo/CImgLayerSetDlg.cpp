@@ -147,6 +147,9 @@ void CImgLayerSetDlg::OnBnClickedOk()
 BOOL CImgLayerSetDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
+	CWnd* pColorCount = GetDlgItem(IDC_EDIT_LAYER_COLORCNT);
+	if (pColorCount)
+		pColorCount->EnableWindow(FALSE); // 颜色通道数由每层目录中的连续编号 BMP 自动确定
 	m_nLayerIndex = g_PrtImgLayer.nLayerIndex + 1;
 	m_nStartJetOff = g_PrtImgLayer.nStartJetOffset;
 	m_nPrtDir = g_PrtImgLayer.nPrtDir;
