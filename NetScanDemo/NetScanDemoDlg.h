@@ -50,6 +50,9 @@ public:
 	CString m_szPrtFile;
 	int m_nPrtDataSize;
 	int m_nJobImgLayerCnts;
+	int m_nCurrentDataChannelCount;
+	int m_nCurrentPassCount;
+	CString m_szImageInfo2Base;
 	BOOL m_bStopMonitor;
 	volatile LONG m_lStopSocketServer;
 	SOCKET m_hListenSocket;
@@ -91,6 +94,7 @@ public:
 	afx_msg void OnBnClickedButtonResetEncoder();
 	void UpdateButtonState();
 	void UpdatePrtState(const PrtRunInfo& prtInfo);
+	void UpdateImageInfo2();
 	afx_msg void OnEnChangeMfcPrtFilePath();
 	BOOL ScanPrintRoot(const CString& szRootPath, CString& szError);
 	BOOL LoadLayerData(const PrintLayerFolder& layer, CString& szError);
@@ -112,7 +116,6 @@ public:
 	afx_msg void OnBnClickedButton4();
 	afx_msg void OnBnClickedCheckCloseVtMonitor();
 	afx_msg void OnStnClickedStaticRipView();
-	afx_msg LRESULT OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnUpdatePassCount(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnSocketFlashControl(WPARAM wParam, LPARAM lParam);

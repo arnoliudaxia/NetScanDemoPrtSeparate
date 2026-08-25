@@ -18,7 +18,6 @@
 #define new DEBUG_NEW
 #endif
 
-#define WM_UPDATE_Y_STEP_DISTANCE (WM_APP + 1)
 #define WM_UPDATE_PASS_COUNT      (WM_APP + 2)
 #define WM_APPEND_PROCESS_LOG     (WM_APP + 3)
 #define WM_SOCKET_FLASH_CONTROL   (WM_APP + 4)
@@ -478,6 +477,8 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_nPrtRevColumn = 0;
 	m_nPrtEncoderVal = 0;
 	m_nJobImgLayerCnts=1;
+	m_nCurrentDataChannelCount = 0;
+	m_nCurrentPassCount = -1;
 	m_bImageLoaded=FALSE;
 	for(int c=0;c<MAX_COLORS;c++)
 		m_pPrtData[c]=NULL;
@@ -520,7 +521,6 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON4, &CNetScanDemoDlg::OnBnClickedButton4)
 	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
 	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
-	ON_MESSAGE(WM_UPDATE_Y_STEP_DISTANCE, &CNetScanDemoDlg::OnUpdateYStepDistance)
 	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
 	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
 	ON_MESSAGE(WM_SOCKET_FLASH_CONTROL, &CNetScanDemoDlg::OnSocketFlashControl)
@@ -794,12 +794,15 @@ LPRY_EXTFUN_RFIDOpen          RY_RFIDOpen = NULL;
 BOOL CNetScanDemoDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
-	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("Y步进距离: -- mm"));
-	SetDlgItemText(IDC_STATIC_ImageInfo4, _T("PASS数量: --"));
+	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("PASS数量: --"));
+	SetDlgItemText(IDC_STATIC_ImageInfo4, _T(""));
+	m_szImageInfo2Base = _T("请选择包含 1\\1.bmp 的打印根文件夹");
+	m_nCurrentPassCount = -1;
+	UpdateImageInfo2();
 	SetDlgItemText(IDC_STATIC_REMAIN_COLS,
 		_T("作业打印运行中: --    当前图层打印完成: --    剩余列数: --\r\n")
 		_T("当前打印图层: --    当前图层PASS总数: --    当前打印PASS: --\r\n")
-		_T("当前数据处理图层: --    当前数据传输图层: --"));
+		_T("当前数据处理图层: --    打印数据总层数: --"));
 	// Add "About..." menu item to system menu.
 
 	// IDM_ABOUTBOX must be in the system command range.
@@ -900,10 +903,20 @@ void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 	//	CWnd* pWnd=(CWnd*)GetDlgItem(IDC_BTN_PRINT);
 	CString szTxt;
 	CString szRunInfo;
+	CString szTotalLayers = _T("--");
+	CString szPassInfo = _T("PASS数量: --");
+	if (!m_PrintLayers.empty())
+	{
+		szTotalLayers.Format(_T("%d"), m_nJobImgLayerCnts);
+	}
+	if (m_nCurrentPassCount >= 0)
+		szPassInfo.Format(_T("PASS数量: %d"), m_nCurrentPassCount);
+	SetDlgItemText(IDC_STATIC_ImageInfo3, szPassInfo);
+	UpdateImageInfo2();
 	szRunInfo.Format(
 		_T("作业打印运行中: %s    当前图层打印完成: %s    剩余列数: %u\r\n")
 		_T("当前打印图层: %d    当前图层PASS总数: %d    当前打印PASS: %d\r\n")
-		_T("当前数据处理图层: %d    当前数据传输图层: %d"),
+		_T("当前数据处理图层: %d    打印数据总层数: %s"),
 		prtInfo.bJobPrtRuning ? _T("是") : _T("否"),
 		prtInfo.bLayerPrtIsOver ? _T("是") : _T("否"),
 		prtInfo.nRevPrtCols,
@@ -911,7 +924,7 @@ void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 		prtInfo.nLayerPassCount,
 		prtInfo.nPrintPassIndex,
 		prtInfo.nProcLayerIndex,
-		prtInfo.nDTLayerPassIndex);
+		static_cast<LPCTSTR>(szTotalLayers));
 	SetDlgItemText(IDC_STATIC_REMAIN_COLS, szRunInfo);
 	switch (prtInfo.nPrtState)
 	{
@@ -1270,6 +1283,7 @@ BOOL CNetScanDemoDlg::ScanPrintRoot(const CString& szRootPath, CString& szError)
 		}
 		m_PrintLayers.push_back(layer);
 	}
+	m_nCurrentDataChannelCount = m_PrintLayers.front().nColorCount;
 	return TRUE;
 }
 
@@ -1350,6 +1364,7 @@ BOOL CNetScanDemoDlg::LoadLayerData(const PrintLayerFolder& layer, CString& szEr
 	}
 
 	m_nPrtDataSize = layer.nDataSize;
+	m_nCurrentDataChannelCount = layer.nColorCount;
 	g_PrtImgLayer.nColorCnts = layer.nColorCount;
 	g_PrtImgLayer.nBytesPerLine = layer.nBytesPerLine;
 	g_PrtImgLayer.nHeight = layer.nHeight;
@@ -1385,6 +1400,31 @@ void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
 
 bool teststtt = false;
 using namespace std;
+
+static LPCTSTR GetPassProcStateText(unsigned int nProcState)
+{
+	switch (nProcState)
+	{
+	case 0:
+		return _T("数据处理阶段");
+	case 1:
+		return _T("源数据处理就绪");
+	case 2:
+		return _T("数据行列转换结束");
+	case 3:
+		return _T("数据已写入硬件");
+	case 4:
+		return _T("已添加到打印队列");
+	case 5:
+		return _T("打印结束");
+	case 6:
+		return _T("打印内存已释放");
+	case 7:
+		return _T("错误状态");
+	default:
+		return _T("未知状态");
+	}
+}
 
 
 #define DP0(fmt) {TCHAR sOut[256];_stprintf_s(sOut,_T(fmt));OutputDebugString(sOut);} 
@@ -1427,6 +1467,10 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		}
 
 		const PrintLayerFolder& layer = pdlg->m_PrintLayers[n];
+		pdlg->PostMessage(
+			WM_UPDATE_PASS_COUNT,
+			static_cast<WPARAM>(static_cast<INT_PTR>(-1)),
+			0);
 		WriteProcessLog(pdlg, _T("开始读取第%d层：%s"),
 			n + 1, static_cast<LPCTSTR>(layer.szPath));
 		if (!pdlg->LoadLayerData(layer, szErr))
@@ -1530,15 +1574,11 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 				if (!pdlg->m_bJobStarted || !pPrtPassDes)
 					break;
 				//::OutputDebugString(_T("[RYZ] end IDP_GetPassItem3333333333333333333"));
-				WriteProcessLog(pdlg, _T("PASS %d/%d就绪：状态=%u，步进=%d um，空=%d"),
-					i + 1, nPassCount, pPrtPassDes->nProcState,
+				WriteProcessLog(pdlg, _T("PASS %d/%d就绪：状态=%s，步进=%d um，空=%d"),
+					i + 1, nPassCount, GetPassProcStateText(pPrtPassDes->nProcState),
 					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass ? 1 : 0);
 				if (pPrtPassDes->bIsNullPass)
 					continue;
-				pdlg->PostMessage(
-					WM_UPDATE_Y_STEP_DISTANCE,
-					0,
-					static_cast<LPARAM>(pPrtPassDes->nStpVector));
 				if(pPrtPassDes)
 				{
 					if(0==i)
@@ -1655,7 +1695,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		}
 		IDP_FreeImageLayer(n);
 		pdlg->FreeLayerData();
-		WriteProcessLog(pdlg, _T("第%d层打印完成，准备读取下一层"), n + 1);
+		WriteProcessLog(pdlg, _T("第%d层打印完成；准备读取下一层"), n + 1);
 		if (!pdlg->m_bJobStarted)
 		{
 			bAllLayersCompleted = FALSE;
@@ -1872,6 +1912,8 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 	// TODO:  在此添加控件通知处理程序代码
 	UpdateData();
 	m_PrintLayers.clear();
+	m_nCurrentDataChannelCount = 0;
+	m_nCurrentPassCount = -1;
 	CString  szText;
 	CString szPreviewFile = m_szPrtFile;
 	while (szPreviewFile.GetLength() > 3 &&
@@ -1881,7 +1923,6 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 	m_ImgPreView.ShowPreview(szPreviewFile);
 	if (m_ImgPreView.m_hBmp)
 	{
-		CWnd* pwnd = GetDlgItem(IDC_STATIC_ImageInfo2);
 		CFile file;
 		BITMAPFILEHEADER   bmpfileheader;
 		BITMAPINFOHEADER   bmpinfoheader;
@@ -1892,30 +1933,32 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 			const long nPixelHeight = bmpinfoheader.biHeight < 0
 				? -bmpinfoheader.biHeight
 				: bmpinfoheader.biHeight;
-			if (g_PrtImgLayer.nYDPI > 0)
+			if (g_PrtImgLayer.nXDPI > 0 && g_PrtImgLayer.nYDPI > 0)
 			{
+				const double fXActualWidth =
+					static_cast<double>(bmpinfoheader.biWidth) / g_PrtImgLayer.nXDPI * 25.4;
 				const double fYActualHeight =
 					static_cast<double>(nPixelHeight) / g_PrtImgLayer.nYDPI * 25.4;
-				szText.Format(_T("%dx%d Y:%.3fmm"),
-					bmpinfoheader.biWidth, nPixelHeight, fYActualHeight);
+				szText.Format(_T("%dx%d X:%.3fmm Y:%.3fmm"),
+					bmpinfoheader.biWidth, nPixelHeight,
+					fXActualWidth, fYActualHeight);
 			}
 			else
 			{
-				szText.Format(_T("%dx%d YDPI无效"),
+				szText.Format(_T("%dx%d XDPI/YDPI无效"),
 					bmpinfoheader.biWidth, nPixelHeight);
 			}
 			if (bmpinfoheader.biBitCount > 1)
 				szText += _T(" \r\nNot Support!");
-			if (pwnd)
-				pwnd->SetWindowText(szText);
+			m_szImageInfo2Base = szText;
+			UpdateImageInfo2();
 			file.Close();
 		}
 	}
 	else
 	{
-		CWnd* pwnd = GetDlgItem(IDC_STATIC_ImageInfo2);
-		if (pwnd)
-			pwnd->SetWindowText(_T("请选择包含 1\\1.bmp 的打印根文件夹"));
+		m_szImageInfo2Base = _T("请选择包含 1\\1.bmp 的打印根文件夹");
+		UpdateImageInfo2();
 	}
 	m_bImageLoaded = FALSE;
 }
@@ -2068,29 +2111,32 @@ void CNetScanDemoDlg::OnStnClickedStaticRipView()
 	// TODO: 在此添加控件通知处理程序代码
 }
 
-LRESULT CNetScanDemoDlg::OnUpdateYStepDistance(WPARAM wParam, LPARAM lParam)
+LRESULT CNetScanDemoDlg::OnUpdatePassCount(WPARAM wParam, LPARAM lParam)
 {
-	UNREFERENCED_PARAMETER(wParam);
-	const int nStpVector = static_cast<int>(lParam);
-	const double fYStepDistance = static_cast<double>(nStpVector) / 1000.0;
-
-	CString szStepInfo;
-	szStepInfo.Format(_T("Y步进距离: %.3f mm"), fYStepDistance);
-	SetDlgItemText(IDC_STATIC_ImageInfo3, szStepInfo);
+	UNREFERENCED_PARAMETER(lParam);
+	m_nCurrentPassCount = static_cast<int>(static_cast<INT_PTR>(wParam));
+	CString szPassInfo = _T("PASS数量: --");
+	if (m_nCurrentPassCount >= 0)
+		szPassInfo.Format(_T("PASS数量: %d"), m_nCurrentPassCount);
+	SetDlgItemText(IDC_STATIC_ImageInfo3, szPassInfo);
 
 	return 0;
 }
 
-LRESULT CNetScanDemoDlg::OnUpdatePassCount(WPARAM wParam, LPARAM lParam)
+void CNetScanDemoDlg::UpdateImageInfo2()
 {
-	UNREFERENCED_PARAMETER(lParam);
-	const int nPassCount = static_cast<int>(static_cast<INT_PTR>(wParam));
-
-	CString szPassInfo;
-	szPassInfo.Format(_T("PASS数量: %d"), nPassCount);
-	SetDlgItemText(IDC_STATIC_ImageInfo4, szPassInfo);
-
-	return 0;
+	CString szImageInfo = m_szImageInfo2Base;
+	if (!m_PrintLayers.empty())
+	{
+		CString szChannelInfo;
+		szChannelInfo.Format(_T("    颜色通道数量: %d"), m_nCurrentDataChannelCount);
+		szImageInfo += szChannelInfo;
+	}
+	else
+	{
+		szImageInfo += _T("    颜色通道数量: --");
+	}
+	SetDlgItemText(IDC_STATIC_ImageInfo2, szImageInfo);
 }
 
 LRESULT CNetScanDemoDlg::OnSocketFlashControl(WPARAM wParam, LPARAM lParam)
@@ -2167,17 +2213,13 @@ LRESULT CNetScanDemoDlg::OnAppendProcessLog(WPARAM wParam, LPARAM lParam)
 	if (!m_szProcessLog.IsEmpty())
 		m_szProcessLog += _T("\r\n");
 	m_szProcessLog += szLine;
-	while (true)
-	{
-		int nFirst = m_szProcessLog.Find(_T("\r\n"));
-		if (nFirst < 0)
-			break;
-		int nSecond = m_szProcessLog.Find(_T("\r\n"), nFirst + 2);
-		if (nSecond < 0 || m_szProcessLog.Find(_T("\r\n"), nSecond + 2) < 0)
-			break;
-		m_szProcessLog = m_szProcessLog.Mid(nFirst + 2);
-	}
 	SetDlgItemText(IDC_STATIC_1111, m_szProcessLog);
+	CWnd* pLogWnd = GetDlgItem(IDC_STATIC_1111);
+	if (pLogWnd != NULL)
+	{
+		pLogWnd->SendMessage(EM_SETSEL, m_szProcessLog.GetLength(), m_szProcessLog.GetLength());
+		pLogWnd->SendMessage(EM_SCROLLCARET, 0, 0);
+	}
 	return 0;
 }
 
