@@ -180,6 +180,10 @@ BOOL CNetScanDemoDlg::StartSocketServer()
 	}
 	m_bSocketInitialized = TRUE;
 	InterlockedExchange(&m_lStopSocketServer, 0);
+	{
+		CSingleLock lock(&m_SocketEventLock, TRUE);
+		m_SocketEventQueue.clear();
+	}
 
 	CWinThread* pThread = AfxBeginThread(SocketServerThread, this,
 		THREAD_PRIORITY_NORMAL, 0, CREATE_SUSPENDED);
@@ -195,6 +199,54 @@ BOOL CNetScanDemoDlg::StartSocketServer()
 	m_pSocketServerThread = pThread;
 	pThread->ResumeThread();
 	return TRUE;
+}
+
+void CNetScanDemoDlg::QueueSocketEvent(const std::string& eventText)
+{
+	CSingleLock lock(&m_SocketEventLock, TRUE);
+	m_SocketEventQueue.push_back(eventText);
+}
+
+void CNetScanDemoDlg::NotifySocketStartEvent(int nTotalLayers)
+{
+	char szEvent[64] = {};
+	sprintf_s(szEvent, "EVENT START_JOB TOTAL_LAYERS=%d\r\n", nTotalLayers);
+	QueueSocketEvent(szEvent);
+}
+
+void CNetScanDemoDlg::NotifySocketLayerStartEvent(int nLayerNumber)
+{
+	char szEvent[64] = {};
+	sprintf_s(szEvent, "EVENT LAYER_START LAYER=%d\r\n", nLayerNumber);
+	QueueSocketEvent(szEvent);
+}
+
+void CNetScanDemoDlg::NotifySocketPassReadyEvent(int nCurrentPass, int nTotalPass,
+	int nStepVector, BOOL bIsNullPass)
+{
+	char szEvent[128] = {};
+	sprintf_s(szEvent,
+		"EVENT PASS_READY CURRENT=%d TOTAL=%d STEP=%d EMPTY=%d\r\n",
+		nCurrentPass, nTotalPass, nStepVector, bIsNullPass ? 1 : 0);
+	QueueSocketEvent(szEvent);
+}
+
+void CNetScanDemoDlg::NotifySocketPassRemainingZeroEvent(
+	int nLayerNumber, int nPassNumber)
+{
+	char szEvent[96] = {};
+	sprintf_s(szEvent,
+		"EVENT PASS_REMAINING_ZERO LAYER=%d PASS=%d REMAINING=0\r\n",
+		nLayerNumber, nPassNumber);
+	QueueSocketEvent(szEvent);
+}
+
+void CNetScanDemoDlg::NotifySocketPrintJobCompletedEvent(int nTotalLayers)
+{
+	char szEvent[80] = {};
+	sprintf_s(szEvent,
+		"EVENT PRINT_JOB_COMPLETED TOTAL_LAYERS=%d\r\n", nTotalLayers);
+	QueueSocketEvent(szEvent);
 }
 
 void CNetScanDemoDlg::StopSocketServer()
@@ -262,6 +314,36 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 	std::vector<std::string> receiveBuffers;
 	while (InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0)
 	{
+		std::vector<std::string> pendingEvents;
+		{
+			CSingleLock lock(&pDlg->m_SocketEventLock, TRUE);
+			pendingEvents.swap(pDlg->m_SocketEventQueue);
+		}
+		for (size_t nEventIndex = 0; nEventIndex < pendingEvents.size(); ++nEventIndex)
+		{
+			const std::string& eventText = pendingEvents[nEventIndex];
+			for (size_t i = 0; i < clientSockets.size();)
+			{
+				const int nSent = send(clientSockets[i], eventText.data(),
+					static_cast<int>(eventText.size()), 0);
+				if (nSent != static_cast<int>(eventText.size()))
+				{
+					shutdown(clientSockets[i], SD_BOTH);
+					closesocket(clientSockets[i]);
+					clientSockets.erase(clientSockets.begin() + i);
+					receiveBuffers.erase(receiveBuffers.begin() + i);
+					continue;
+				}
+				++i;
+			}
+			const std::string eventLog = FormatSocketReceivedData(
+				eventText.data(), static_cast<int>(eventText.size()));
+			const CString szEventLog(eventLog.c_str());
+			WriteProcessLog(pDlg, _T("Socket已广播事件：%s，客户端数=%u"),
+				static_cast<LPCTSTR>(szEventLog),
+				static_cast<unsigned int>(clientSockets.size()));
+		}
+
 		fd_set readSet;
 		FD_ZERO(&readSet);
 		FD_SET(hListenSocket, &readSet);
@@ -580,6 +662,8 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_nSinglePassLayerIndex = -1;
 	m_nSinglePassIndex = -1;
 	m_nSinglePassInitialCols = 0;
+	m_nSinglePassLastCols = 0;
+	m_bSinglePassZeroNotified = FALSE;
 	m_bImageLoaded=FALSE;
 	for(int c=0;c<MAX_COLORS;c++)
 		m_pPrtData[c]=NULL;
@@ -1063,6 +1147,8 @@ void CNetScanDemoDlg::ResetSinglePassProgress()
 	m_nSinglePassLayerIndex = -1;
 	m_nSinglePassIndex = -1;
 	m_nSinglePassInitialCols = 0;
+	m_nSinglePassLastCols = 0;
+	m_bSinglePassZeroNotified = FALSE;
 	if (GetDlgItem(IDC_PROGRESS_singlePass) != NULL)
 		SendDlgItemMessage(IDC_PROGRESS_singlePass, PBM_SETPOS, 0, 0);
 }
@@ -1084,11 +1170,24 @@ void CNetScanDemoDlg::UpdateSinglePassProgress(const PrtRunInfo& prtInfo)
 		m_nSinglePassLayerIndex = prtInfo.nPrintLayerIndex;
 		m_nSinglePassIndex = prtInfo.nPrintPassIndex;
 		m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
+		m_nSinglePassLastCols = prtInfo.nRevPrtCols;
+		m_bSinglePassZeroNotified = FALSE;
 	}
-	else if (prtInfo.nRevPrtCols > m_nSinglePassInitialCols)
+	else
 	{
-		// PASS 刚切换时 SDK 可能先上报 0，随后才上报完整剩余列数。
-		m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
+		if (!m_bSinglePassZeroNotified &&
+			m_nSinglePassLastCols > 0 && prtInfo.nRevPrtCols == 0)
+		{
+			NotifySocketPassRemainingZeroEvent(
+				m_nSinglePassLayerIndex + 1, m_nSinglePassIndex + 1);
+			m_bSinglePassZeroNotified = TRUE;
+		}
+		if (prtInfo.nRevPrtCols > m_nSinglePassInitialCols)
+		{
+			// PASS 刚切换时 SDK 可能先上报 0，随后才上报完整剩余列数。
+			m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
+		}
+		m_nSinglePassLastCols = prtInfo.nRevPrtCols;
 	}
 
 	int nRemainingPercent = 0;
@@ -1207,13 +1306,17 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 			GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("停止任务"));
 			g_PrtImgLayer.nLayerIndex = -1;
 			WriteProcessLog(this, _T("启动顺序打印线程：图层数=%d"), m_nJobImgLayerCnts);
-			if (AfxBeginThread(PrintThread,this) == NULL)
+			CWinThread* pPrintThread = AfxBeginThread(PrintThread, this,
+				THREAD_PRIORITY_NORMAL, 0, CREATE_SUSPENDED);
+			if (pPrintThread == NULL)
 			{
 				m_bJobStarted = false;
 				UpdateButtonState();
 				AfxMessageBox(_T("创建打印线程失败。"));
 				return;
 			}
+			NotifySocketStartEvent(m_nJobImgLayerCnts);
+			pPrintThread->ResumeThread();
 			CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
 			if (pApp) {
 				pApp->SaveJobParam();
@@ -1695,6 +1798,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 
 		if(nPassCount>0)
 		{
+			pdlg->NotifySocketLayerStartEvent(n + 1);
 			int Lentest = 0;
 			for(int i=0;i<nPassCount;i++)
 			{
@@ -1737,6 +1841,8 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 				WriteProcessLog(pdlg, _T("PASS %d/%d就绪：状态=%s，步进=%d um，空=%d"),
 					i + 1, nPassCount, GetPassProcStateText(pPrtPassDes->nProcState),
 					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass ? 1 : 0);
+				pdlg->NotifySocketPassReadyEvent(i + 1, nPassCount,
+					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass);
 				if (pPrtPassDes->bIsNullPass)
 					continue;
 				if(pPrtPassDes)
@@ -1865,6 +1971,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 	if (bAllLayersCompleted)
 	{
 		WriteProcessLog(pdlg, _T("全部图层处理结束，停止打印任务"));
+		pdlg->NotifySocketPrintJobCompletedEvent(pdlg->m_nJobImgLayerCnts);
 		AfxMessageBox(_T("打印完成"));
 	}
 	else

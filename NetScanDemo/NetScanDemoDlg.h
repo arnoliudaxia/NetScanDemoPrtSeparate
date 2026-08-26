@@ -8,6 +8,8 @@
 #include "RyTreeListCtl.h"
 #include "PicScreen.h"
 #include <atlimage.h>
+#include <afxmt.h>
+#include <string>
 #include <vector>
 
 struct SocketPressInkRequest;
@@ -71,12 +73,16 @@ public:
 	int m_nSinglePassLayerIndex;
 	int m_nSinglePassIndex;
 	unsigned int m_nSinglePassInitialCols;
+	unsigned int m_nSinglePassLastCols;
+	BOOL m_bSinglePassZeroNotified;
 	CString m_szImageInfo2Base;
 	BOOL m_bStopMonitor;
 	volatile LONG m_lStopSocketServer;
 	SOCKET m_hListenSocket;
 	CWinThread* m_pSocketServerThread;
 	BOOL m_bSocketInitialized;
+	CCriticalSection m_SocketEventLock;
+	std::vector<std::string> m_SocketEventQueue;
 	SocketPressInkRequest* m_pSocketPressInkRequest;
 	DWORD m_dwSocketPressInkStartTick;
 	DWORD m_dwSocketPressInkDuration;
@@ -104,6 +110,13 @@ public:
 	static UINT SocketServerThread(LPVOID lpvoid);
 	BOOL StartSocketServer();
 	void StopSocketServer();
+	void QueueSocketEvent(const std::string& eventText);
+	void NotifySocketStartEvent(int nTotalLayers);
+	void NotifySocketLayerStartEvent(int nLayerNumber);
+	void NotifySocketPassReadyEvent(int nCurrentPass, int nTotalPass,
+		int nStepVector, BOOL bIsNullPass);
+	void NotifySocketPassRemainingZeroEvent(int nLayerNumber, int nPassNumber);
+	void NotifySocketPrintJobCompletedEvent(int nTotalLayers);
 	afx_msg void OnBnClickedButtonReloadwave();
 	afx_msg void OnBnClickedButtonVtSet();
 	afx_msg void OnBnClickedButtonCali();
