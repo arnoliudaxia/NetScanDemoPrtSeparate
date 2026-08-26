@@ -577,6 +577,9 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_nJobImgLayerCnts=1;
 	m_nCurrentDataChannelCount = 0;
 	m_nCurrentPassCount = -1;
+	m_nSinglePassLayerIndex = -1;
+	m_nSinglePassIndex = -1;
+	m_nSinglePassInitialCols = 0;
 	m_bImageLoaded=FALSE;
 	for(int c=0;c<MAX_COLORS;c++)
 		m_pPrtData[c]=NULL;
@@ -897,6 +900,8 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 	m_JobStateImage.ShowWindow(SW_HIDE);
 	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("PASS数量: --"));
 	SetDlgItemText(IDC_STATIC_ImageInfo4, _T(""));
+	SendDlgItemMessage(IDC_PROGRESS_singlePass, PBM_SETRANGE32, 0, 100);
+	ResetSinglePassProgress();
 	m_szImageInfo2Base = _T("请选择包含 1\\1.bmp 的打印根文件夹");
 	m_nCurrentPassCount = -1;
 	UpdateImageInfo2();
@@ -1002,6 +1007,7 @@ HCURSOR CNetScanDemoDlg::OnQueryDragIcon()
 void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 {
 	//	CWnd* pWnd=(CWnd*)GetDlgItem(IDC_BTN_PRINT);
+	UpdateSinglePassProgress(prtInfo);
 	CString szTxt;
 	CString szRunInfo;
 	CString szTotalLayers = _T("--");
@@ -1050,6 +1056,52 @@ void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 		break;
 	}
 	SetWindowText(szTxt);
+}
+
+void CNetScanDemoDlg::ResetSinglePassProgress()
+{
+	m_nSinglePassLayerIndex = -1;
+	m_nSinglePassIndex = -1;
+	m_nSinglePassInitialCols = 0;
+	if (GetDlgItem(IDC_PROGRESS_singlePass) != NULL)
+		SendDlgItemMessage(IDC_PROGRESS_singlePass, PBM_SETPOS, 0, 0);
+}
+
+void CNetScanDemoDlg::UpdateSinglePassProgress(const PrtRunInfo& prtInfo)
+{
+	if (!prtInfo.bJobPrtRuning ||
+		prtInfo.nPrintLayerIndex < 0 || prtInfo.nPrintPassIndex < 0)
+	{
+		ResetSinglePassProgress();
+		return;
+	}
+
+	const BOOL bNewPass =
+		m_nSinglePassLayerIndex != prtInfo.nPrintLayerIndex ||
+		m_nSinglePassIndex != prtInfo.nPrintPassIndex;
+	if (bNewPass)
+	{
+		m_nSinglePassLayerIndex = prtInfo.nPrintLayerIndex;
+		m_nSinglePassIndex = prtInfo.nPrintPassIndex;
+		m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
+	}
+	else if (prtInfo.nRevPrtCols > m_nSinglePassInitialCols)
+	{
+		// PASS 刚切换时 SDK 可能先上报 0，随后才上报完整剩余列数。
+		m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
+	}
+
+	int nRemainingPercent = 0;
+	if (m_nSinglePassInitialCols > 0)
+	{
+		const unsigned int nRemainingCols = min(
+			prtInfo.nRevPrtCols, m_nSinglePassInitialCols);
+		nRemainingPercent = static_cast<int>(
+			(static_cast<ULONGLONG>(nRemainingCols) * 100ULL) /
+			m_nSinglePassInitialCols);
+	}
+	SendDlgItemMessage(
+		IDC_PROGRESS_singlePass, PBM_SETPOS, nRemainingPercent, 0);
 }
 
 UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
@@ -1141,11 +1193,13 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 
 		m_nJobImgLayerCnts = static_cast<int>(m_PrintLayers.size());
 		WriteProcessLog(this, _T("文件夹检查完成：图层数=%d"), m_nJobImgLayerCnts);
+		UpdateImageInfo2();
 
 		CPrtJobDlg dlg;
 		dlg.m_nImageLayerCount=m_nJobImgLayerCnts;
 		if (dlg.DoModal() == IDOK) 
 		{
+			ResetSinglePassProgress();
 			m_bJobStarted = true;
 			m_bImageLoaded = FALSE;
 			m_PrtFolderBrowse.EnableWindow(FALSE);
@@ -1171,6 +1225,7 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 		WriteProcessLog(this, _T("用户请求停止任务"));
 		IDP_StopPrintJob();
 		m_bJobStarted = false;
+		ResetSinglePassProgress();
 		GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("启动任务"));
 	}
 }
@@ -1835,6 +1890,7 @@ LRESULT CNetScanDemoDlg::OnPrintJobFinished(WPARAM wParam, LPARAM lParam)
 {
 	UNREFERENCED_PARAMETER(wParam);
 	UNREFERENCED_PARAMETER(lParam);
+	ResetSinglePassProgress();
 	UpdateButtonState();
 	return 0;
 }
@@ -2233,13 +2289,15 @@ void CNetScanDemoDlg::UpdateImageInfo2()
 	CString szImageInfo = m_szImageInfo2Base;
 	if (!m_PrintLayers.empty())
 	{
-		CString szChannelInfo;
-		szChannelInfo.Format(_T("    颜色通道数量: %d"), m_nCurrentDataChannelCount);
-		szImageInfo += szChannelInfo;
+		CString szDataInfo;
+		szDataInfo.Format(_T("    颜色通道数量: %d    数据总层数: %d"),
+			m_nCurrentDataChannelCount,
+			static_cast<int>(m_PrintLayers.size()));
+		szImageInfo += szDataInfo;
 	}
 	else
 	{
-		szImageInfo += _T("    颜色通道数量: --");
+		szImageInfo += _T("    颜色通道数量: --    数据总层数: --");
 	}
 	SetDlgItemText(IDC_STATIC_ImageInfo2, szImageInfo);
 }

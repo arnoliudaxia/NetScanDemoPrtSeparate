@@ -477,7 +477,9 @@ BEGIN
     LTEXT           "Static",IDC_STATIC_ImageInfo2,7,224,235,10
     LTEXT           "",IDC_STATIC_ImageInfo4,350,224,75,10,NOT WS_VISIBLE
     LTEXT           "‘À––◊¥Ã¨: --",IDC_STATIC_REMAIN_COLS,18,483,568,32,WS_BORDER
-    CONTROL         "",IDC_STATIC_JOB_STATE_IMAGE,"Static",SS_NOTIFY | WS_BORDER,516,299,64,62
+    LTEXT           "",IDC_STATIC_JOB_STATE_IMAGE,516,299,64,62,SS_NOTIFY | WS_BORDER | NOT WS_GROUP
+    CONTROL         "",IDC_PROGRESS_singlePass,"msctls_progress32",WS_BORDER,73,523,263,14
+    LTEXT           "µ•Pass £”‡",IDC_STATIC,21,528,36,8
 END
 
 
@@ -804,6 +806,7 @@ END
 //
 
 IDB_PNG1                PNG                     "res\\runing.png"
+
 IDB_PNG2                PNG                     "res\\finish.png"
 
 

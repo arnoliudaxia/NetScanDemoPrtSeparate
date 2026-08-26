@@ -68,6 +68,9 @@ public:
 	int m_nJobImgLayerCnts;
 	int m_nCurrentDataChannelCount;
 	int m_nCurrentPassCount;
+	int m_nSinglePassLayerIndex;
+	int m_nSinglePassIndex;
+	unsigned int m_nSinglePassInitialCols;
 	CString m_szImageInfo2Base;
 	BOOL m_bStopMonitor;
 	volatile LONG m_lStopSocketServer;
@@ -110,6 +113,8 @@ public:
 	afx_msg void OnBnClickedButtonResetEncoder();
 	void UpdateButtonState();
 	void UpdatePrtState(const PrtRunInfo& prtInfo);
+	void ResetSinglePassProgress();
+	void UpdateSinglePassProgress(const PrtRunInfo& prtInfo);
 	void UpdateImageInfo2();
 	afx_msg void OnEnChangeMfcPrtFilePath();
 	BOOL ScanPrintRoot(const CString& szRootPath, CString& szError);
