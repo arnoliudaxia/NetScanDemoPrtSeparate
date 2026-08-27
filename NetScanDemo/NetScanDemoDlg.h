@@ -73,8 +73,6 @@ public:
 	int m_nSinglePassLayerIndex;
 	int m_nSinglePassIndex;
 	unsigned int m_nSinglePassInitialCols;
-	unsigned int m_nSinglePassLastCols;
-	BOOL m_bSinglePassZeroNotified;
 	CString m_szImageInfo2Base;
 	BOOL m_bStopMonitor;
 	volatile LONG m_lStopSocketServer;
@@ -115,7 +113,6 @@ public:
 	void NotifySocketLayerStartEvent(int nLayerNumber);
 	void NotifySocketPassReadyEvent(int nCurrentPass, int nTotalPass,
 		int nStepVector, BOOL bIsNullPass);
-	void NotifySocketPassRemainingZeroEvent(int nLayerNumber, int nPassNumber);
 	void NotifySocketPrintJobCompletedEvent(int nTotalLayers);
 	afx_msg void OnBnClickedButtonReloadwave();
 	afx_msg void OnBnClickedButtonVtSet();

@@ -231,16 +231,6 @@ void CNetScanDemoDlg::NotifySocketPassReadyEvent(int nCurrentPass, int nTotalPas
 	QueueSocketEvent(szEvent);
 }
 
-void CNetScanDemoDlg::NotifySocketPassRemainingZeroEvent(
-	int nLayerNumber, int nPassNumber)
-{
-	char szEvent[96] = {};
-	sprintf_s(szEvent,
-		"EVENT PASS_REMAINING_ZERO LAYER=%d PASS=%d REMAINING=0\r\n",
-		nLayerNumber, nPassNumber);
-	QueueSocketEvent(szEvent);
-}
-
 void CNetScanDemoDlg::NotifySocketPrintJobCompletedEvent(int nTotalLayers)
 {
 	char szEvent[80] = {};
@@ -662,8 +652,6 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_nSinglePassLayerIndex = -1;
 	m_nSinglePassIndex = -1;
 	m_nSinglePassInitialCols = 0;
-	m_nSinglePassLastCols = 0;
-	m_bSinglePassZeroNotified = FALSE;
 	m_bImageLoaded=FALSE;
 	for(int c=0;c<MAX_COLORS;c++)
 		m_pPrtData[c]=NULL;
@@ -1147,8 +1135,6 @@ void CNetScanDemoDlg::ResetSinglePassProgress()
 	m_nSinglePassLayerIndex = -1;
 	m_nSinglePassIndex = -1;
 	m_nSinglePassInitialCols = 0;
-	m_nSinglePassLastCols = 0;
-	m_bSinglePassZeroNotified = FALSE;
 	if (GetDlgItem(IDC_PROGRESS_singlePass) != NULL)
 		SendDlgItemMessage(IDC_PROGRESS_singlePass, PBM_SETPOS, 0, 0);
 }
@@ -1170,24 +1156,14 @@ void CNetScanDemoDlg::UpdateSinglePassProgress(const PrtRunInfo& prtInfo)
 		m_nSinglePassLayerIndex = prtInfo.nPrintLayerIndex;
 		m_nSinglePassIndex = prtInfo.nPrintPassIndex;
 		m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
-		m_nSinglePassLastCols = prtInfo.nRevPrtCols;
-		m_bSinglePassZeroNotified = FALSE;
 	}
 	else
 	{
-		if (!m_bSinglePassZeroNotified &&
-			m_nSinglePassLastCols > 0 && prtInfo.nRevPrtCols == 0)
-		{
-			NotifySocketPassRemainingZeroEvent(
-				m_nSinglePassLayerIndex + 1, m_nSinglePassIndex + 1);
-			m_bSinglePassZeroNotified = TRUE;
-		}
 		if (prtInfo.nRevPrtCols > m_nSinglePassInitialCols)
 		{
 			// PASS 刚切换时 SDK 可能先上报 0，随后才上报完整剩余列数。
 			m_nSinglePassInitialCols = prtInfo.nRevPrtCols;
 		}
-		m_nSinglePassLastCols = prtInfo.nRevPrtCols;
 	}
 
 	int nRemainingPercent = 0;
@@ -1632,7 +1608,9 @@ BOOL CNetScanDemoDlg::LoadLayerData(const PrintLayerFolder& layer, CString& szEr
 	g_PrtImgLayer.nBytesPerLine = layer.nBytesPerLine;
 	g_PrtImgLayer.nHeight = layer.nHeight;
 	g_PrtImgLayer.nWidth = layer.nWidth / g_PrtImgLayer.nGrayBits;
-	g_PrtImgLayer.nValidClrMask = (1U << layer.nColorCount) - 1U;
+	// 有效颜色掩码对应设备颜色编号，并不等同于当前 BMP 数据通道数量。
+	// 保持 SDK 示例使用的全颜色掩码，由 nColorCnts 决定传入的数据通道数。
+	g_PrtImgLayer.nValidClrMask = 0xFFFF;
 	m_bImageLoaded = TRUE;
 	return TRUE;
 }
@@ -1748,8 +1726,10 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 		for (int i = 0; i < layer.nColorCount; ++i)
 			pBmpFile[i] = pdlg->m_pPrtData[i];
 		g_PrtImgLayer.nLayerIndex = n;
-		WriteProcessLog(pdlg, _T("写入第%d层：颜色通道=%d，尺寸=%ldx%ld，数据=%d字节/通道"),
-			n + 1, layer.nColorCount, layer.nWidth, layer.nHeight, layer.nDataSize);
+		WriteProcessLog(pdlg,
+			_T("写入第%d层：颜色通道=%d，有效颜色掩码=0x%04X，尺寸=%ldx%ld，数据=%d字节/通道"),
+			n + 1, layer.nColorCount, g_PrtImgLayer.nValidClrMask,
+			layer.nWidth, layer.nHeight, layer.nDataSize);
 		const int nWriteResult = IDP_WriteImgLayerData(
 			&g_PrtImgLayer, pBmpFile, pdlg->m_nPrtDataSize);
 		WriteProcessLog(pdlg, _T("IDP_WriteImgLayerData(图层%d) 返回=%d"), n, nWriteResult);
