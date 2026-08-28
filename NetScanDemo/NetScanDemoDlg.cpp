@@ -27,6 +27,9 @@
 #define WM_PRINT_JOB_FINISHED     (WM_APP + 6)
 
 static const UINT_PTR SOCKET_PRESS_INK_TIMER_ID = 0x1200;
+static const UINT_PTR AUTO_PRESS_INK_TIMER_ID = 0x1201;
+static const DWORD AUTO_PRESS_INK_INTERVAL_MS = 60 * 1000;
+static const DWORD AUTO_PRESS_INK_DURATION_MS = 1000;
 
 BEGIN_MESSAGE_MAP(CPngStaticCtrl, CStatic)
 	ON_WM_PAINT()
@@ -222,12 +225,22 @@ void CNetScanDemoDlg::NotifySocketLayerStartEvent(int nLayerNumber)
 }
 
 void CNetScanDemoDlg::NotifySocketPassReadyEvent(int nCurrentPass, int nTotalPass,
-	int nStepVector, BOOL bIsNullPass)
+	int nStepVector, float fYStartPosition, BOOL bIsNullPass)
 {
 	char szEvent[128] = {};
-	sprintf_s(szEvent,
-		"EVENT PASS_READY CURRENT=%d TOTAL=%d STEP=%d EMPTY=%d\r\n",
-		nCurrentPass, nTotalPass, nStepVector, bIsNullPass ? 1 : 0);
+	if (nCurrentPass == 1)
+	{
+		const double fYStartPositionUm = static_cast<double>(fYStartPosition) * 1000.0;
+		sprintf_s(szEvent,
+			"EVENT PASS_READY CURRENT=%d TOTAL=%d STEP=%.3f EMPTY=%d\r\n",
+			nCurrentPass, nTotalPass, fYStartPositionUm, bIsNullPass ? 1 : 0);
+	}
+	else
+	{
+		sprintf_s(szEvent,
+			"EVENT PASS_READY CURRENT=%d TOTAL=%d STEP=%d EMPTY=%d\r\n",
+			nCurrentPass, nTotalPass, nStepVector, bIsNullPass ? 1 : 0);
+	}
 	QueueSocketEvent(szEvent);
 }
 
@@ -644,6 +657,10 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_pSocketPressInkRequest = NULL;
 	m_dwSocketPressInkStartTick = 0;
 	m_dwSocketPressInkDuration = 0;
+	m_bAutoPressInkEnabled = FALSE;
+	m_bAutoPressInkActive = FALSE;
+	m_dwAutoPressInkStartTick = 0;
+	m_dwAutoPressInkNextTick = 0;
 	m_nPrtRevColumn = 0;
 	m_nPrtEncoderVal = 0;
 	m_nJobImgLayerCnts=1;
@@ -693,6 +710,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON1, &CNetScanDemoDlg::OnBnClickedButton1)
 	ON_BN_CLICKED(IDC_BUTTON3, &CNetScanDemoDlg::OnBnClickedButton3)
 	ON_BN_CLICKED(IDC_BUTTON4, &CNetScanDemoDlg::OnBnClickedButton4)
+	ON_BN_CLICKED(IDC_BUTTON2, &CNetScanDemoDlg::OnBnClickedButton2)
 	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
 	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
 	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
@@ -968,6 +986,7 @@ LPRY_EXTFUN_RFIDOpen          RY_RFIDOpen = NULL;
 BOOL CNetScanDemoDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
+	UpdateAutoPressInkButton();
 	m_JobStateImage.LoadPngResource(IDB_PNG1);
 	m_JobStateImage.ShowWindow(SW_HIDE);
 	SetDlgItemText(IDC_STATIC_ImageInfo3, _T("PASS数量: --"));
@@ -1822,7 +1841,8 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 					i + 1, nPassCount, GetPassProcStateText(pPrtPassDes->nProcState),
 					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass ? 1 : 0);
 				pdlg->NotifySocketPassReadyEvent(i + 1, nPassCount,
-					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass);
+					pPrtPassDes->nStpVector, pPrtPassDes->fYMinJetImgPos,
+					pPrtPassDes->bIsNullPass);
 				if (pPrtPassDes->bIsNullPass)
 					continue;
 				if(pPrtPassDes)
@@ -1837,11 +1857,6 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 					{
 						//打印之前需要的Y步进量
                         //MOV_Y（pPrtPassDes->nStpVector ）//um
-#ifdef RY_MOVE_CTL
-						int nYStep = MM_TO_DOT(pPrtPassDes->nStpVector/1000.0, g_movConfig.fySysdpi) * 48;
-						int nSpd = MM_TO_DOT(g_movConfig.fyMovSpd, g_movConfig.fySysdpi) * 48;
-						DEM_MoveY(TRUE,nSpd,nYStep,true,false,g_movConfig.fyMovRate);
-#endif
 
 					}
 					//X打印起始位置
@@ -2215,6 +2230,7 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 
 void CNetScanDemoDlg::OnDestroy()
 {
+	StopAutoPressInk(TRUE);
 	if (m_pSocketPressInkRequest != NULL)
 	{
 		KillTimer(SOCKET_PRESS_INK_TIMER_ID);
@@ -2280,7 +2296,111 @@ void CNetScanDemoDlg::OnTimer(UINT_PTR nIDEvent)
 			SetEvent(pRequest->hCompletedEvent);
 		}
 	}
+	else if (nIDEvent == AUTO_PRESS_INK_TIMER_ID && m_bAutoPressInkEnabled)
+	{
+		const DWORD dwNow = GetTickCount();
+		if (m_bAutoPressInkActive)
+		{
+			if (dwNow - m_dwAutoPressInkStartTick >= AUTO_PRESS_INK_DURATION_MS)
+			{
+				m_bAutoPressInkActive = FALSE;
+				const BOOL bStopped = MVT_SetOutPut(0, 0x8, false);
+				WriteProcessLog(this, bStopped
+					? _T("自动压墨完成：J62已关闭")
+					: _T("自动压墨结束，但关闭J62失败"));
+			}
+		}
+		else if (m_bJobStarted || m_bPrinting || m_pSocketPressInkRequest != NULL)
+		{
+			// 只有连续空闲满60秒才执行，打印或Socket压墨期间重新计算空闲时间。
+			m_dwAutoPressInkNextTick = dwNow + AUTO_PRESS_INK_INTERVAL_MS;
+		}
+		else if (static_cast<LONG>(dwNow - m_dwAutoPressInkNextTick) >= 0)
+		{
+			if (MVT_SetOutPut(0, 0x8, true))
+			{
+				m_bAutoPressInkActive = TRUE;
+				m_dwAutoPressInkStartTick = dwNow;
+				m_dwAutoPressInkNextTick = dwNow + AUTO_PRESS_INK_INTERVAL_MS;
+				WriteProcessLog(this, _T("自动压墨开始：J62打开，持续1秒"));
+			}
+			else
+			{
+				KillTimer(AUTO_PRESS_INK_TIMER_ID);
+				m_bAutoPressInkEnabled = FALSE;
+				WriteProcessLog(this, _T("自动压墨已停止：无法打开J62"));
+				AfxMessageBox(_T("自动压墨启动失败：无法打开J62。"));
+			}
+		}
+		UpdateAutoPressInkButton();
+	}
 	CDialogEx::OnTimer(nIDEvent);
+}
+
+void CNetScanDemoDlg::UpdateAutoPressInkButton()
+{
+	CWnd* pButton = GetDlgItem(IDC_BUTTON2);
+	if (pButton == NULL)
+		return;
+
+	CString szText;
+	if (!m_bAutoPressInkEnabled)
+		szText = _T("闲置自动压墨");
+	else if (m_bAutoPressInkActive)
+		szText = _T("取消（压墨中）");
+	else if (m_bJobStarted || m_bPrinting)
+		szText = _T("取消（打印中）");
+	else if (m_pSocketPressInkRequest != NULL)
+		szText = _T("取消（等待）");
+	else
+	{
+		const DWORD dwNow = GetTickCount();
+		const LONG nRemainMilliseconds = static_cast<LONG>(m_dwAutoPressInkNextTick - dwNow);
+		const DWORD nRemainSeconds = nRemainMilliseconds > 0
+			? (static_cast<DWORD>(nRemainMilliseconds) + 999) / 1000
+			: 0;
+		szText.Format(_T("取消（%u秒）"), nRemainSeconds);
+	}
+	pButton->SetWindowText(szText);
+}
+
+void CNetScanDemoDlg::StopAutoPressInk(BOOL bDisableSchedule)
+{
+	if (bDisableSchedule)
+	{
+		KillTimer(AUTO_PRESS_INK_TIMER_ID);
+		m_bAutoPressInkEnabled = FALSE;
+	}
+	if (m_bAutoPressInkActive)
+	{
+		MVT_SetOutPut(0, 0x8, false);
+		m_bAutoPressInkActive = FALSE;
+		WriteProcessLog(this, _T("自动压墨已取消：J62已关闭"));
+	}
+	UpdateAutoPressInkButton();
+}
+
+void CNetScanDemoDlg::OnBnClickedButton2()
+{
+	if (m_bAutoPressInkEnabled)
+	{
+		StopAutoPressInk(TRUE);
+		WriteProcessLog(this, _T("按钮操作：已关闭闲置自动压墨"));
+		return;
+	}
+
+	m_bAutoPressInkEnabled = TRUE;
+	m_bAutoPressInkActive = FALSE;
+	m_dwAutoPressInkNextTick = GetTickCount() + AUTO_PRESS_INK_INTERVAL_MS;
+	if (SetTimer(AUTO_PRESS_INK_TIMER_ID, 200, NULL) == 0)
+	{
+		m_bAutoPressInkEnabled = FALSE;
+		UpdateAutoPressInkButton();
+		AfxMessageBox(_T("无法启动自动压墨定时器。"));
+		return;
+	}
+	WriteProcessLog(this, _T("按钮操作：已启用闲置自动压墨，每空闲60秒压墨1秒"));
+	UpdateAutoPressInkButton();
 }
 
 #include "CMoveCtlDlg.h"
@@ -2419,10 +2539,10 @@ LRESULT CNetScanDemoDlg::OnSocketPressInkControl(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
-	if (m_pSocketPressInkRequest != NULL)
+	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
 	{
 		pRequest->nError = 2;
-		WriteProcessLog(this, _T("Socket压墨命令被拒绝：当前正在压墨"));
+		WriteProcessLog(this, _T("Socket压墨命令被拒绝：当前正在执行其他压墨操作"));
 		return 0;
 	}
 	if (!MVT_SetOutPut(0, 0x8, true))

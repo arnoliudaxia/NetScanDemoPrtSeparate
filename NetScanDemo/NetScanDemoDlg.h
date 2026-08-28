@@ -84,6 +84,10 @@ public:
 	SocketPressInkRequest* m_pSocketPressInkRequest;
 	DWORD m_dwSocketPressInkStartTick;
 	DWORD m_dwSocketPressInkDuration;
+	BOOL m_bAutoPressInkEnabled;
+	BOOL m_bAutoPressInkActive;
+	DWORD m_dwAutoPressInkStartTick;
+	DWORD m_dwAutoPressInkNextTick;
 	BOOL m_bImageLoaded;
 	LPBYTE m_pPrtData[MAX_COLORS];
 	std::vector<PrintLayerFolder> m_PrintLayers;
@@ -112,7 +116,7 @@ public:
 	void NotifySocketStartEvent(int nTotalLayers);
 	void NotifySocketLayerStartEvent(int nLayerNumber);
 	void NotifySocketPassReadyEvent(int nCurrentPass, int nTotalPass,
-		int nStepVector, BOOL bIsNullPass);
+		int nStepVector, float fYStartPosition, BOOL bIsNullPass);
 	void NotifySocketPrintJobCompletedEvent(int nTotalLayers);
 	afx_msg void OnBnClickedButtonReloadwave();
 	afx_msg void OnBnClickedButtonVtSet();
@@ -145,6 +149,9 @@ public:
 	afx_msg void OnBnClickedButton1();
 	afx_msg void OnBnClickedButton3();
 	afx_msg void OnBnClickedButton4();
+	afx_msg void OnBnClickedButton2();
+	void StopAutoPressInk(BOOL bDisableSchedule);
+	void UpdateAutoPressInkButton();
 	afx_msg void OnBnClickedCheckCloseVtMonitor();
 	afx_msg void OnStnClickedStaticRipView();
 	afx_msg LRESULT OnUpdatePassCount(WPARAM wParam, LPARAM lParam);
