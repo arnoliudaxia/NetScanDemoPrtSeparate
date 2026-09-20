@@ -57,7 +57,7 @@ END_MESSAGE_MAP()
 
 void CVTSetDlg::OnBnClickedButtonTempset()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (!m_bTempAll) {
 		g_sysParam.phctl_param[g_nPhTBL[m_nPHID]].fDestTemp[nTempIndex] = m_fSetVal;
@@ -75,7 +75,7 @@ void CVTSetDlg::OnBnClickedButtonTempset()
 
 void CVTSetDlg::OnBnClickedButtonVolset()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (!m_bVolAll) {
 		if (m_nVolIndex == 0) {
@@ -224,6 +224,6 @@ BOOL CVTSetDlg::OnInitDialog()
 
 void CVTSetDlg::OnBnClickedOk()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CDialogEx::OnOK();
 }

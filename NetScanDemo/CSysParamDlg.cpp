@@ -172,7 +172,7 @@ void CSysParamDlg::ReDrawFlashList() {
 
 void CSysParamDlg::OnBnClickedOk()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	g_sysParam.clrbar_param.fCBDistance = m_fCBDistance;
 	g_sysParam.clrbar_param.fCBWidth = m_fCBWidth;
@@ -216,7 +216,7 @@ void CSysParamDlg::OnBnClickedOk()
 
 void CSysParamDlg::OnBnClickedButtonSet()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (m_bAll) {
 		for (int c = 0; c < MAX_COLORS; c++) {

@@ -247,7 +247,7 @@ BOOL CAdjParamDlg::OnInitDialog()
 extern LPPRINTER_INFO g_pSysInfo;
 void CAdjParamDlg::OnBnClickedButtonGroupOffset()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	int XGoffset = (int)g_pSysInfo->nXSysEncDPI/g_Calbration.fxadjdpi * m_nXGoffset;
 	g_sysParam.nPhgXGroupOff[m_nClrIndex][m_nGGroupIndex][m_nGDir] = XGoffset;
@@ -259,7 +259,7 @@ void CAdjParamDlg::OnBnClickedButtonGroupOffset()
 
 void CAdjParamDlg::OnBnClickedButtonGigroupOffset()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	int GIXoffset = g_pSysInfo->nXSysEncDPI/g_Calbration.fxadjdpi * m_nGIXoffset;
 	g_sysParam.nPhgJetRowOff[m_nGIClrIndex][m_nGIGroupIndex][m_nGIJetIndex][m_nGIGDir] = GIXoffset;
@@ -269,7 +269,7 @@ void CAdjParamDlg::OnBnClickedButtonGigroupOffset()
 
 void CAdjParamDlg::OnCbnSelchangeComboGidir()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	UpdateGIGroupList();
 }
@@ -277,7 +277,7 @@ void CAdjParamDlg::OnCbnSelchangeComboGidir()
 
 void CAdjParamDlg::OnCbnSelchangeComboGdir()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	UpdateGroupList();
 }
@@ -285,7 +285,7 @@ void CAdjParamDlg::OnCbnSelchangeComboGdir()
 
 void CAdjParamDlg::OnBnClickedOk()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	int  BiDirEncPrtOff =  g_pSysInfo->nXSysEncDPI/g_Calbration.fxadjdpi * m_nBiDirEncPrtOff;
 	g_sysParam.nBiDirEncPrtOff = BiDirEncPrtOff;
@@ -296,7 +296,7 @@ void CAdjParamDlg::OnBnClickedOk()
 #include "CLackJetDlg.h"
 void CAdjParamDlg::OnBnClickedButtonLackJet()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CLackJetDlg dlg;
 	dlg.DoModal();
 }
@@ -494,7 +494,7 @@ int tetettt(unsigned char* pPhgData,int c,int gg,int nWidth,int Height,int nByte
 }
 void CAdjParamDlg::OnBnClickedButtonPhstatus()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();	
 	if (m_bPrinting) {
 		AfxMessageBox(_T("其他校准处于打印中..."));
@@ -521,7 +521,7 @@ void CAdjParamDlg::OnBnClickedButtonPhstatus()
 
 void CAdjParamDlg::OnBnClickedButtonVtical()
 {
-	// TODO: 在此添加控件通知处理程序代码	
+		
 	UpdateData();
 	if (m_bPrinting) {
 		AfxMessageBox(_T("其他校准处于打印中..."));
@@ -547,7 +547,7 @@ void CAdjParamDlg::OnBnClickedButtonVtical()
 
 void CAdjParamDlg::OnBnClickedButtonStep()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (m_bPrinting) {
 		AfxMessageBox(_T("其他校准处于打印中..."));
@@ -573,7 +573,7 @@ void CAdjParamDlg::OnBnClickedButtonStep()
 
 void CAdjParamDlg::OnBnClickedButtonXoffGroup()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (m_bPrinting) {
 		AfxMessageBox(_T("其他校准处于打印中..."));
@@ -599,7 +599,7 @@ void CAdjParamDlg::OnBnClickedButtonXoffGroup()
 
 void CAdjParamDlg::OnBnClickedButtonXoff()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();	
 	if (m_bPrinting) {
 		AfxMessageBox(_T("其他校准处于打印中..."));
@@ -625,7 +625,7 @@ void CAdjParamDlg::OnBnClickedButtonXoff()
 
 void CAdjParamDlg::OnBnClickedButton6()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (m_bPrinting) {
 		AfxMessageBox(_T("其他校准处于打印中..."));
@@ -726,7 +726,7 @@ UINT CAdjParamDlg::PrtCaliBrationThread(LPVOID pvoid) {
 
 void CAdjParamDlg::OnBnClickedButtonStop()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	if (m_bPrinting)
 		m_bStop = TRUE;
 	//m_bJobStarted = false;

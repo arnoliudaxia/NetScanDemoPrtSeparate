@@ -1202,7 +1202,6 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 {
 	PrtRunInfo prtInfo = {};
 
-	bool tetetttt = true;
 	UINT  nLastPrtState = 0xFF;
 	DWORD dwTick = GetTickCount();
 	DWORD dwChkTick = GetTickCount();
@@ -1210,17 +1209,7 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 	CNetScanDemoDlg* pCtlDlg = (CNetScanDemoDlg*)lpvoid;
 	while (!pCtlDlg->m_bStopMonitor)
 	{
-		//tetetttt = DEV_DeviceIsConnected();
-		//if(tetetttt)
-		//{
-		//	AfxMessageBox("11111111");
-		//}else{
-		//	AfxMessageBox("2222222");
-		//}
-		//test start
-		//g_pSysInfo = DEV_GetDeviceInfo();
-		//DEV_GetPrinterEncValue();
-		//test end
+
 		 DEV_DeviceIsConnected();
 		if (!IDP_GetPrintState(&prtInfo))
 		{
@@ -1636,7 +1625,7 @@ BOOL CNetScanDemoDlg::LoadLayerData(const PrintLayerFolder& layer, CString& szEr
 #include "CImgLayerSetDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CString szErr;
 	int nResult = 0;
@@ -1847,18 +1836,6 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 					continue;
 				if(pPrtPassDes)
 				{
-					if(0==i)
-					{
-						//第一PASS Y位置定位，
-						//pPrtPassDes->fYMinJetImgPos 为Y起始打印位置里Y零位的距离
-						//MOV_Y(pPrtPassDes->fYMinJetImgPos);
-					}
-					else
-					{
-						//打印之前需要的Y步进量
-                        //MOV_Y（pPrtPassDes->nStpVector ）//um
-
-					}
 					//X打印起始位置
 					//pPrtPassDes->nStartEncPos
 					//打印的运动起点计算
@@ -2010,7 +1987,7 @@ void CNetScanDemoDlg::UpdateButtonState()
 #include "CRelaodWaveDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonReloadwave()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	
 	CReloadWaveDlg dlg;
 	UINT nHeadData[8];
@@ -2050,7 +2027,7 @@ void CNetScanDemoDlg::OnBnClickedButtonReloadwave()
 #include "CVTSetDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonVtSet()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CVTSetDlg dlg;
 	float fVoltage[33];
 	if (dlg.DoModal() == IDOK) {
@@ -2080,7 +2057,7 @@ void CNetScanDemoDlg::OnBnClickedButtonVtSet()
 #include "CAdjParamDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonCali()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CAdjParamDlg dlg;
 	if (dlg.DoModal() == IDOK) {
 		if (!DEV_UpdateParam(&g_sysParam))
@@ -2093,7 +2070,7 @@ void CNetScanDemoDlg::OnBnClickedButtonCali()
 #include "CSysParamDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonSysParam()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CSysParamDlg dlg;
 	if (dlg.DoModal() == IDOK) {
 		if (!DEV_UpdateParam(&g_sysParam))
@@ -2406,7 +2383,7 @@ void CNetScanDemoDlg::OnBnClickedButton2()
 #include "CMoveCtlDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonMovctl()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	CMoveCtlDlg dlg;
 	dlg.DoModal();
@@ -2417,7 +2394,7 @@ void CNetScanDemoDlg::OnBnClickedButtonMovctl()
 #include "CAirInkDialog.h"
 void CNetScanDemoDlg::OnBnClickedButtonAirInk()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CAirInkDialog inkDlg;
 	inkDlg.DoModal();
 }
@@ -2425,7 +2402,7 @@ void CNetScanDemoDlg::OnBnClickedButtonAirInk()
 #include "CAdibCtrlDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonAdibCtl()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CAdibCtrlDlg adibDlg;
 	adibDlg.DoModal();
 }
@@ -2433,7 +2410,7 @@ void CNetScanDemoDlg::OnBnClickedButtonAdibCtl()
 
 void CNetScanDemoDlg::OnBnClickedCheckInkWatch()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (m_bEnableInkWacth)
 		DEV_EnableInkWatch(TRUE, 0, 0);
@@ -2445,14 +2422,14 @@ void CNetScanDemoDlg::OnBnClickedCheckInkWatch()
 void CNetScanDemoDlg::OnBnClickedButton1()
 {
 	
-	// TODO: 在此添加控件通知处理程序代码
+	
 	DEV_GenAllRegReport("D:\\ROYAL\\3DSCAN\\");
 }
 
 
 void CNetScanDemoDlg::OnBnClickedButton3()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CString AppmianRuteTemp = m_szAppPath  + "appmain";
 	char* AppmianRute = (char*)(AppmianRuteTemp.GetBuffer(0));
 	DEV_UpdateAppFile(AppmianRute,0);
@@ -2462,7 +2439,7 @@ void CNetScanDemoDlg::OnBnClickedButton3()
 
 void CNetScanDemoDlg::OnBnClickedButton4()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CString AppmianRuteTemp = m_szAppPath  + "soc_system.rbf";
 	char* AppmianRute = (char*)(AppmianRuteTemp.GetBuffer(0));
 	DEV_UpdateFpgaFile(AppmianRute,0);
@@ -2471,12 +2448,12 @@ void CNetScanDemoDlg::OnBnClickedButton4()
 
 void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 }
 
 void CNetScanDemoDlg::OnStnClickedStaticRipView()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 }
 
 LRESULT CNetScanDemoDlg::OnUpdatePassCount(WPARAM wParam, LPARAM lParam)

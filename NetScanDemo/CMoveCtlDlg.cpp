@@ -72,7 +72,7 @@ END_MESSAGE_MAP()
 
 void CMoveCtlDlg::OnBnClickedButtonReset()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	DEM_StopAll(TRUE);
 	DEM_UpdateXMovCfg(g_movConfig.fxMovAcc,g_movConfig.fxIoOption);
@@ -85,7 +85,7 @@ void CMoveCtlDlg::OnBnClickedButtonReset()
 
 void CMoveCtlDlg::OnBnClickedButtonFront()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	UpdateData(FALSE);
 	BOOL bDir = m_bYReverse?TRUE:FALSE;
@@ -100,7 +100,7 @@ void CMoveCtlDlg::OnBnClickedButtonFront()
 
 void CMoveCtlDlg::OnBnClickedButtonLeft()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	UpdateData(FALSE);
 	BOOL bDir = m_bXReverse ? FALSE : TRUE;
@@ -113,7 +113,7 @@ void CMoveCtlDlg::OnBnClickedButtonLeft()
 
 void CMoveCtlDlg::OnBnClickedButtonBack()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	UpdateData(FALSE);
 	BOOL bDir = m_bYReverse ? FALSE : TRUE;
@@ -126,7 +126,7 @@ void CMoveCtlDlg::OnBnClickedButtonBack()
 
 void CMoveCtlDlg::OnBnClickedButtonRight()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	UpdateData(FALSE);
 	BOOL bDir = m_bXReverse ? TRUE : FALSE;
@@ -139,7 +139,7 @@ void CMoveCtlDlg::OnBnClickedButtonRight()
 
 void CMoveCtlDlg::OnBnClickedButtonStop()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 #ifdef RY_MOVE_CTL
 	DEM_StopAll(TRUE);
 #endif
@@ -148,7 +148,7 @@ void CMoveCtlDlg::OnBnClickedButtonStop()
 
 void CMoveCtlDlg::OnBnClickedButtonApply()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	g_movConfig.fxMovSpd = m_fSpd;
 	g_movConfig.fxMovAcc = m_fXAccTime;

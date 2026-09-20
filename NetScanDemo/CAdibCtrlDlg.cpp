@@ -141,7 +141,6 @@ void CAdibCtrlDlg::UpdateAdibInfo(BOOL bState)
 	CString szInfo;
 	static BOOL bLastSet = FALSE;
 	int nResult = 0;
-	bool tetetttt= false;
 	
 	/////////////////更新连接状态
 	/*if (bState)
@@ -314,7 +313,7 @@ void CAdibCtrlDlg::OnTimer(UINT_PTR nIDEvent)
 
 void CAdibCtrlDlg::OnBnClickedButtonCleanmode()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CWnd* pWnd;
 	if (!m_bCleanMode) {
 		int nIoOption = 0x80;
@@ -338,7 +337,7 @@ void CAdibCtrlDlg::OnBnClickedButtonCleanmode()
 
 void CAdibCtrlDlg::OnBnClickedButtonCleanPump2()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CWnd* pWnd;
 	if (!m_bCleanPump2) {
 		int nIoOption = 0x1000;
@@ -361,7 +360,7 @@ void CAdibCtrlDlg::OnBnClickedButtonCleanPump2()
 
 void CAdibCtrlDlg::OnBnClickedButtonCleanPump1()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CWnd* pWnd;
 	char buf[1024] = {0};
 	if (!m_bCleanPump1) {
@@ -389,7 +388,7 @@ void CAdibCtrlDlg::OnBnClickedButtonCleanPump1()
 
 void CAdibCtrlDlg::OnBnClickedCleanheadidisok()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CWnd* pWnd;
 	if(!m_bCleanHead)
 	{
@@ -459,20 +458,20 @@ void CAdibCtrlDlg::OnBnClickedButton1()
 	int nIoOption =  0x100;
 	nIoOption |= 0x400;
 	::DEV_AdibControl(&_adibSettings, nIoOption, 1, NULL, 0);
-	// TODO: 在此添加控件通知处理程序代码
+	
 }
 
 
 void CAdibCtrlDlg::OnBnClickedOk()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	CDialog::OnOK();
 }
 
 
 void CAdibCtrlDlg::OnBnClickedButton2()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	if (!UpdateData())
 		return;
 	/*bLinkstatus = false;

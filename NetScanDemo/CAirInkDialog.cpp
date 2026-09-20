@@ -200,7 +200,7 @@ BOOL CAirInkDialog::OnInitDialog()
 
 void CAirInkDialog::OnBnClickedButtonSet()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	if(!m_bEnablePress)
 	{
 		AfxMessageBox(_T("请打开负压允许功能"));
@@ -221,7 +221,7 @@ void CAirInkDialog::OnBnClickedButtonSet()
 
 void CAirInkDialog::OnBnClickedButtonPushInk()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	if (!m_bStartPushInk) {
 		m_dwTick = GetTickCount();
@@ -321,7 +321,7 @@ void CAirInkDialog::OnBnClickedCheckEnablePress() {
 }
 void CAirInkDialog::OnBnClickedCheckOut1()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 
@@ -341,7 +341,7 @@ void CAirInkDialog::OnBnClickedCheckOut1()
 
 void CAirInkDialog::OnBnClickedCheckOut2()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 	pWnd = GetDlgItem(_inkCtl[1]);
@@ -364,7 +364,7 @@ void CAirInkDialog::OnBnClickedCheckOut2()
 
 void CAirInkDialog::OnBnClickedCheckOut3()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 	pWnd = GetDlgItem(_inkCtl[2]);
@@ -384,7 +384,7 @@ void CAirInkDialog::OnBnClickedCheckOut3()
 
 void CAirInkDialog::OnBnClickedCheckOut4()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 	pWnd = GetDlgItem(_inkCtl[3]);
@@ -404,7 +404,7 @@ void CAirInkDialog::OnBnClickedCheckOut4()
 
 void CAirInkDialog::OnBnClickedCheckOut5()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 	pWnd = GetDlgItem(_inkCtl[4]);
@@ -424,7 +424,7 @@ void CAirInkDialog::OnBnClickedCheckOut5()
 
 void CAirInkDialog::OnBnClickedCheckOut6()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 	pWnd = GetDlgItem(_inkCtl[5]);
@@ -444,7 +444,7 @@ void CAirInkDialog::OnBnClickedCheckOut6()
 
 void CAirInkDialog::OnBnClickedCheck2()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData();
 	CWnd* pWnd;
 	if (m_bEnableAutoPress) 

@@ -72,7 +72,7 @@ BOOL CLackJetDlg::OnInitDialog()
 
 void CLackJetDlg::OnBnClickedButtonAdd()
 {
-	// TODO: 在此添加控件通知处理程序代码
+	
 	UpdateData(FALSE);
 	if (g_sysParam.nLackJetCount[m_nColorIndex][m_nGroupIndex] <= 31) {
 		g_sysParam.nLackJetTbl[m_nColorIndex][m_nGroupIndex][g_sysParam.nLackJetCount[m_nColorIndex][m_nGroupIndex]] = m_nLackJet;
