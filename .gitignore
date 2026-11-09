@@ -18,14 +18,23 @@ ipch/
 *.aps
 
 # Build outputs
-[Dd]ebug/
-[Rr]elease/
-x64/
-Win32/
-*/[Dd]ebug/
-*/[Rr]elease/
-*/x64/
-*/Win32/
+# 注意：匹配规则必须用前导 / 锚定到具体层级。早期的无锚点写法
+# （*/x64/、[Rr]elease/ 等）会连带忽略 lib/x64/Release/ 下的厂商静态库，
+# 导致 clone 后链接失败（LNK1181）。
+/x64/
+/Win32/
+/[Dd]ebug/
+/[Rr]elease/
+/NetScanDemo/x64/
+/NetScanDemo/Win32/
+/NetScanDemo/[Dd]ebug/
+/NetScanDemo/[Rr]elease/
+# 历史遗留的错误 IntDir 产生的嵌套中间目录（纯编译产物）
+/NetScanDemo/NetScanDemo/
+
+# 厂商静态库：链接必需，必须提交（放在忽略规则之后，确保不被回收）
+!lib/
+!lib/**/*.lib
 
 # Compiler/linker intermediate files
 *.obj
