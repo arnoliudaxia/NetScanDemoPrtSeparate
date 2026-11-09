@@ -39,6 +39,7 @@
 #define IDC_EDIT_JOBID                  1013
 #define IDC_CHECK_INK_WATCH             1013
 #define IDC_EDIT_JOBNAME                1014
+#define IDC_CHECK_CLOSE_VT_MONITOR2     1014
 #define IDC_EDIT_X_STARTPOS             1015
 #define IDC_EDIT_Y_STARTPOS             1016
 #define IDC_EDIT_X_OUTDPI               1017

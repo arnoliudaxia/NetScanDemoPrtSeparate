@@ -62,6 +62,7 @@ public:
 	int m_nPrtRevColumn;
 	int m_nPrtEncoderVal;
 	BOOL m_bCloseAutoCheck;
+	BOOL m_bSocketLogEnabled;
 	CPicScreen m_ImgPreView;
 	CPngStaticCtrl m_JobStateImage;
 	CMFCEditBrowseCtrl m_PrtFolderBrowse;
@@ -153,6 +154,7 @@ public:
 	void StopAutoPressInk(BOOL bDisableSchedule);
 	void UpdateAutoPressInkButton();
 	afx_msg void OnBnClickedCheckCloseVtMonitor();
+	afx_msg void OnBnClickedCheckCloseVtMonitor2();
 	afx_msg void OnStnClickedStaticRipView();
 	afx_msg LRESULT OnUpdatePassCount(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);

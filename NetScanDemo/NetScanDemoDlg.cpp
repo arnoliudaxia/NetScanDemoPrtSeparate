@@ -649,6 +649,7 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 	m_bJobStarted = false;
 	m_bPrinting = false;
+	m_bSocketLogEnabled = FALSE;
 	m_bStopMonitor = false;
 	m_lStopSocketServer = 1;
 	m_hListenSocket = INVALID_SOCKET;
@@ -681,6 +682,7 @@ void CNetScanDemoDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_STATIC_PRT_INFO, m_ListPrtInfo);
 	DDX_Control(pDX, IDC_STATIC_VT_INFO, m_ListDrvInfo);
 	DDX_Check(pDX, IDC_CHECK_CLOSE_VT_MONITOR, m_bCloseAutoCheck);
+	DDX_Check(pDX, IDC_CHECK_CLOSE_VT_MONITOR2, m_bSocketLogEnabled);
 	DDX_Control(pDX, IDC_STATIC_RIP_VIEW, m_ImgPreView);
 	DDX_Control(pDX, IDC_STATIC_JOB_STATE_IMAGE, m_JobStateImage);
 	DDX_Control(pDX, IDC_MFC_PRT_FILE_PATH, m_PrtFolderBrowse);
@@ -712,6 +714,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON4, &CNetScanDemoDlg::OnBnClickedButton4)
 	ON_BN_CLICKED(IDC_BUTTON2, &CNetScanDemoDlg::OnBnClickedButton2)
 	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor)
+	ON_BN_CLICKED(IDC_CHECK_CLOSE_VT_MONITOR2, &CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor2)
 	ON_STN_CLICKED(IDC_STATIC_RIP_VIEW, &CNetScanDemoDlg::OnStnClickedStaticRipView)
 	ON_MESSAGE(WM_UPDATE_PASS_COUNT, &CNetScanDemoDlg::OnUpdatePassCount)
 	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
@@ -999,7 +1002,7 @@ BOOL CNetScanDemoDlg::OnInitDialog()
 	SetDlgItemText(IDC_STATIC_REMAIN_COLS,
 		_T("作业打印运行中: --    当前图层打印完成: --    剩余列数: --\r\n")
 		_T("当前打印图层: --    当前图层PASS总数: --    当前打印PASS: --\r\n")
-		_T("当前数据处理图层: --    打印数据总层数: --"));
+		_T("当前数据处理图层: --    打印数据总层数: --    X偏移: -- mm    Y偏移: -- mm"));
 	// Add "About..." menu item to system menu.
 
 	// IDM_ABOUTBOX must be in the system command range.
@@ -1114,7 +1117,7 @@ void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 	szRunInfo.Format(
 		_T("作业打印运行中: %s    当前图层打印完成: %s    剩余列数: %u\r\n")
 		_T("当前打印图层: %d    当前图层PASS总数: %d    当前打印PASS: %d\r\n")
-		_T("当前数据处理图层: %d    打印数据总层数: %s"),
+		_T("当前数据处理图层: %d    打印数据总层数: %s    X偏移: %.3f mm    Y偏移: %.3f mm"),
 		prtInfo.bJobPrtRuning ? _T("是") : _T("否"),
 		prtInfo.bLayerPrtIsOver ? _T("是") : _T("否"),
 		prtInfo.nRevPrtCols,
@@ -1122,7 +1125,9 @@ void CNetScanDemoDlg::UpdatePrtState(const PrtRunInfo& prtInfo)
 		prtInfo.nLayerPassCount,
 		prtInfo.nPrintPassIndex,
 		prtInfo.nProcLayerIndex,
-		static_cast<LPCTSTR>(szTotalLayers));
+		static_cast<LPCTSTR>(szTotalLayers),
+		g_PrtImgLayer.fPrtXOffet,
+		g_PrtImgLayer.fPrtYOffet);
 	SetDlgItemText(IDC_STATIC_REMAIN_COLS, szRunInfo);
 	const UINT nJobStateImageResource = prtInfo.bJobPrtRuning ? IDB_PNG1 : IDB_PNG2;
 	const BOOL bJobStateImageLoaded =
@@ -2451,6 +2456,11 @@ void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor()
 	
 }
 
+void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor2()
+{
+	UpdateData(TRUE);
+}
+
 void CNetScanDemoDlg::OnStnClickedStaticRipView()
 {
 	
@@ -2552,6 +2562,9 @@ LRESULT CNetScanDemoDlg::OnAppendProcessLog(WPARAM wParam, LPARAM lParam)
 		return 0;
 	CString szMessage = *pMessage;
 	delete pMessage;
+
+	if (!m_bSocketLogEnabled)
+		return 0;
 	SYSTEMTIME timeNow;
 	::GetLocalTime(&timeNow);
 	CString szLine;
