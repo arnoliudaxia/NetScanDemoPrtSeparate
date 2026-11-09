@@ -152,6 +152,76 @@ static void WriteProcessLog(CNetScanDemoDlg* pDlg, LPCTSTR pszFormat, ...)
 }
 
 static const u_short SOCKET_SERVER_PORT = 19090;
+static const u_short PYTHON_LISTENER_PORT = 19091;
+static const DWORD PYTHON_CONNECTION_CHECK_MS = 3000;
+
+// 仅连接本机Python监听端口，非阻塞连接限制耗时，避免阻塞事件广播。
+static SOCKET ConnectPythonListener()
+{
+	SOCKET hSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (hSocket == INVALID_SOCKET)
+		return INVALID_SOCKET;
+	u_long nNonBlocking = 1;
+	if (ioctlsocket(hSocket, FIONBIO, &nNonBlocking) == SOCKET_ERROR)
+	{
+		closesocket(hSocket);
+		return INVALID_SOCKET;
+	}
+	sockaddr_in address = {};
+	address.sin_family = AF_INET;
+	address.sin_port = htons(PYTHON_LISTENER_PORT);
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	int nResult = connect(hSocket, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+	if (nResult == SOCKET_ERROR)
+	{
+		const int nError = WSAGetLastError();
+		if (nError != WSAEWOULDBLOCK && nError != WSAEINPROGRESS)
+		{
+			closesocket(hSocket);
+			return INVALID_SOCKET;
+		}
+		fd_set writeSet, errorSet;
+		FD_ZERO(&writeSet);
+		FD_ZERO(&errorSet);
+		FD_SET(hSocket, &writeSet);
+		FD_SET(hSocket, &errorSet);
+		timeval timeout = {};
+		timeout.tv_usec = 200000;
+		nResult = select(0, NULL, &writeSet, &errorSet, &timeout);
+		int nSocketError = 0;
+		int nErrorLength = sizeof(nSocketError);
+		if (nResult <= 0 || !FD_ISSET(hSocket, &writeSet) ||
+			getsockopt(hSocket, SOL_SOCKET, SO_ERROR,
+				reinterpret_cast<char*>(&nSocketError), &nErrorLength) == SOCKET_ERROR ||
+			nSocketError != 0)
+		{
+			closesocket(hSocket);
+			return INVALID_SOCKET;
+		}
+	}
+	nNonBlocking = 0;
+	if (ioctlsocket(hSocket, FIONBIO, &nNonBlocking) == SOCKET_ERROR)
+	{
+		closesocket(hSocket);
+		return INVALID_SOCKET;
+	}
+	return hSocket;
+}
+
+static void SetSocketSendTimeout(SOCKET hSocket)
+{
+	const DWORD dwTimeout = 1000;
+	setsockopt(hSocket, SOL_SOCKET, SO_SNDTIMEO,
+		reinterpret_cast<const char*>(&dwTimeout), sizeof(dwTimeout));
+}
+
+static BOOL SendPythonProbe(SOCKET hSocket, LONG nRequest)
+{
+	char szProbe[64] = {};
+	sprintf_s(szProbe, "PING TOKEN=%ld\r\n", nRequest);
+	const int nLength = static_cast<int>(strlen(szProbe));
+	return send(hSocket, szProbe, nLength, 0) == nLength;
+}
 
 static std::string FormatSocketReceivedData(const char* pData, int nLength);
 
@@ -183,6 +253,7 @@ BOOL CNetScanDemoDlg::StartSocketServer()
 	}
 	m_bSocketInitialized = TRUE;
 	InterlockedExchange(&m_lStopSocketServer, 0);
+	m_SocketStopEvent.ResetEvent();
 	{
 		CSingleLock lock(&m_SocketEventLock, TRUE);
 		m_SocketEventQueue.clear();
@@ -201,6 +272,86 @@ BOOL CNetScanDemoDlg::StartSocketServer()
 	pThread->m_bAutoDelete = FALSE;
 	m_pSocketServerThread = pThread;
 	pThread->ResumeThread();
+	return TRUE;
+}
+
+BOOL CNetScanDemoDlg::EnsurePythonCommunication()
+{
+	if (m_bCheckingPythonConnection || m_bClosing)
+		return FALSE;
+	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
+	{
+		AfxMessageBox(_T("当前正在压墨，请等待压墨完成后再启动打印任务。"));
+		return FALSE;
+	}
+	if (!m_bSocketInitialized || m_pSocketServerThread == NULL ||
+		InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) != 0)
+	{
+		AfxMessageBox(_T("通信服务未启动，不能启动打印任务。请检查Socket启动日志。"));
+		return FALSE;
+	}
+
+	m_bCheckingPythonConnection = TRUE;
+	// 探测期间冻结整个窗口，防止已校验的目录和图层参数被UI重入修改。
+	EnableWindow(FALSE);
+	const LONG nRequest = InterlockedIncrement(&m_lPythonProbeRequest);
+	const DWORD dwStartTick = GetTickCount();
+	WriteProcessLog(this, _T("启动前检查Python通信：请求=%ld，超时=%lu ms"),
+		nRequest, PYTHON_CONNECTION_CHECK_MS);
+	BOOL bConfirmed = FALSE;
+	BOOL bQuitting = FALSE;
+	while (::IsWindow(GetSafeHwnd()) && !m_bClosing && !bQuitting &&
+		InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) == 0 &&
+		GetTickCount() - dwStartTick < PYTHON_CONNECTION_CHECK_MS)
+	{
+		if (InterlockedCompareExchange(&m_lPythonProbeReply, 0, 0) == nRequest)
+		{
+			bConfirmed = TRUE;
+			break;
+		}
+		// 继续处理UI消息，尤其Socket维护命令的SendMessage，避免互相等待。
+		if (MsgWaitForMultipleObjects(0, NULL, FALSE, 50, QS_ALLINPUT) == WAIT_OBJECT_0)
+		{
+			MSG message = {};
+			for (int i = 0; i < 32 && ::PeekMessage(&message, NULL, 0, 0, PM_REMOVE); ++i)
+			{
+				if (message.message == WM_QUIT)
+				{
+					::PostQuitMessage(static_cast<int>(message.wParam));
+					bQuitting = TRUE;
+					break;
+				}
+				if (!AfxGetApp()->PreTranslateMessage(&message))
+				{
+					::TranslateMessage(&message);
+					::DispatchMessage(&message);
+				}
+			}
+		}
+	}
+	m_bCheckingPythonConnection = FALSE;
+	if (!::IsWindow(GetSafeHwnd()) || m_bClosing || bQuitting ||
+		InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) != 0)
+		return FALSE;
+	EnableWindow(TRUE);
+	// 断开会撤销确认；结束检查时再次核对，不能消费已知失效的快照。
+	bConfirmed = bConfirmed &&
+		InterlockedCompareExchange(&m_lPythonProbeReply, 0, 0) == nRequest;
+	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
+	{
+		WriteProcessLog(this, _T("通信检查期间开始压墨，打印任务未启动"));
+		AfxMessageBox(_T("当前正在压墨，请等待压墨完成后再启动打印任务。"));
+		return FALSE;
+	}
+	if (!bConfirmed)
+	{
+		WriteProcessLog(this, _T("Python通信确认失败，打印任务未启动"));
+		AfxMessageBox(_T("未收到Python程序的通信确认，打印任务未启动。\r\n"
+			"请运行更新后的PLC Python程序。\r\n"
+			"支持Python连接本机19090，或MFC主动连接Python的127.0.0.1:19091。"));
+		return FALSE;
+	}
+	WriteProcessLog(this, _T("Python通信已确认，请求=%ld，允许启动打印任务"), nRequest);
 	return TRUE;
 }
 
@@ -255,21 +406,23 @@ void CNetScanDemoDlg::NotifySocketPrintJobCompletedEvent(int nTotalLayers)
 void CNetScanDemoDlg::StopSocketServer()
 {
 	InterlockedExchange(&m_lStopSocketServer, 1);
+	m_SocketStopEvent.SetEvent();
 	if (m_pSocketServerThread != NULL)
 	{
-		DWORD dwWaitResult = WaitForSingleObject(m_pSocketServerThread->m_hThread, 3000);
-		if (dwWaitResult == WAIT_TIMEOUT && m_hListenSocket != INVALID_SOCKET)
+		HANDLE hThread = m_pSocketServerThread->m_hThread;
+		while (WaitForSingleObject(hThread, 0) != WAIT_OBJECT_0)
 		{
-			shutdown(m_hListenSocket, SD_BOTH);
-			closesocket(m_hListenSocket);
-			m_hListenSocket = INVALID_SOCKET;
-			dwWaitResult = WaitForSingleObject(m_pSocketServerThread->m_hThread, 1000);
+			// 仅派发跨线程SendMessage，不重入用户操作；停止后的维护请求会被拒绝。
+			const DWORD dwResult = MsgWaitForMultipleObjects(1, &hThread, FALSE,
+				50, QS_SENDMESSAGE);
+			if (dwResult == WAIT_OBJECT_0 + 1)
+			{
+				MSG message = {};
+				::PeekMessage(&message, NULL, 0, 0, PM_NOREMOVE);
+			}
 		}
-		if (dwWaitResult == WAIT_OBJECT_0)
-		{
-			delete m_pSocketServerThread;
-			m_pSocketServerThread = NULL;
-		}
+		delete m_pSocketServerThread;
+		m_pSocketServerThread = NULL;
 	}
 	if (m_bSocketInitialized)
 	{
@@ -315,26 +468,96 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 	WriteProcessLog(pDlg, _T("Socket Server已启动：127.0.0.1:%u"), SOCKET_SERVER_PORT);
 	std::vector<SOCKET> clientSockets;
 	std::vector<std::string> receiveBuffers;
+	std::vector<BOOL> pythonPeers;
+	SOCKET hReverseSocket = INVALID_SOCKET;
+	DWORD dwReverseStartTick = 0;
+	DWORD dwLastConnectTick = GetTickCount() - 1000;
+	LONG nLastProbeRequest = 0;
+	const auto removeClient = [&](size_t i)
+	{
+		if (pythonPeers[i])
+			InterlockedExchange(&pDlg->m_lPythonProbeReply, 0);
+		if (clientSockets[i] == hReverseSocket)
+			hReverseSocket = INVALID_SOCKET;
+		shutdown(clientSockets[i], SD_BOTH);
+		closesocket(clientSockets[i]);
+		clientSockets.erase(clientSockets.begin() + i);
+		receiveBuffers.erase(receiveBuffers.begin() + i);
+		pythonPeers.erase(pythonPeers.begin() + i);
+	};
+	const auto addClient = [&](SOCKET hSocket) -> BOOL
+	{
+		SetSocketSendTimeout(hSocket);
+		clientSockets.push_back(hSocket);
+		receiveBuffers.push_back(std::string());
+		pythonPeers.push_back(FALSE);
+		const char szReady[] = "NETSCAN_SERVER_READY\r\n";
+		if (send(hSocket, szReady, sizeof(szReady) - 1, 0) != sizeof(szReady) - 1)
+		{
+			removeClient(clientSockets.size() - 1);
+			return FALSE;
+		}
+		return TRUE;
+	};
 	while (InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0)
 	{
+		// 双方均可主动连接，但反向尝试只在没有已识别Python通道时进行。
+		const DWORD dwNow = GetTickCount();
+		for (size_t i = 0; i < clientSockets.size(); ++i)
+		{
+			if (clientSockets[i] == hReverseSocket && !pythonPeers[i] &&
+				dwNow - dwReverseStartTick >= 2000)
+			{
+				removeClient(i);
+				break;
+			}
+		}
+		if (hReverseSocket == INVALID_SOCKET &&
+			std::find(pythonPeers.begin(), pythonPeers.end(), TRUE) == pythonPeers.end() &&
+			dwNow - dwLastConnectTick >= 1000 && clientSockets.size() < FD_SETSIZE - 1)
+		{
+			dwLastConnectTick = dwNow;
+			hReverseSocket = ConnectPythonListener();
+			if (hReverseSocket != INVALID_SOCKET)
+			{
+				dwReverseStartTick = GetTickCount();
+				if (addClient(hReverseSocket))
+					WriteProcessLog(pDlg, _T("MFC已主动连接Python：127.0.0.1:%u，等待HELLO确认"),
+						PYTHON_LISTENER_PORT);
+			}
+		}
+
+		const LONG nProbeRequest = InterlockedCompareExchange(&pDlg->m_lPythonProbeRequest, 0, 0);
+		if (nProbeRequest > 0 && nProbeRequest != nLastProbeRequest)
+		{
+			nLastProbeRequest = nProbeRequest;
+			for (size_t i = 0; i < clientSockets.size();)
+			{
+				if (pythonPeers[i] && !SendPythonProbe(clientSockets[i], nProbeRequest))
+				{
+					removeClient(i);
+					continue;
+				}
+				++i;
+			}
+		}
 		std::vector<std::string> pendingEvents;
 		{
 			CSingleLock lock(&pDlg->m_SocketEventLock, TRUE);
 			pendingEvents.swap(pDlg->m_SocketEventQueue);
 		}
-		for (size_t nEventIndex = 0; nEventIndex < pendingEvents.size(); ++nEventIndex)
+		for (size_t nEventIndex = 0; nEventIndex < pendingEvents.size() &&
+			InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0; ++nEventIndex)
 		{
 			const std::string& eventText = pendingEvents[nEventIndex];
-			for (size_t i = 0; i < clientSockets.size();)
+			for (size_t i = 0; i < clientSockets.size() &&
+				InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0;)
 			{
 				const int nSent = send(clientSockets[i], eventText.data(),
 					static_cast<int>(eventText.size()), 0);
 				if (nSent != static_cast<int>(eventText.size()))
 				{
-					shutdown(clientSockets[i], SD_BOTH);
-					closesocket(clientSockets[i]);
-					clientSockets.erase(clientSockets.begin() + i);
-					receiveBuffers.erase(receiveBuffers.begin() + i);
+					removeClient(i);
 					continue;
 				}
 				++i;
@@ -380,12 +603,9 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 				}
 				else
 				{
-					clientSockets.push_back(hClientSocket);
-					receiveBuffers.push_back(std::string());
-					const char szReady[] = "NETSCAN_SERVER_READY\r\n";
-					send(hClientSocket, szReady, sizeof(szReady) - 1, 0);
-					WriteProcessLog(pDlg, _T("Socket客户端已连接：127.0.0.1:%u，当前连接数=%u"),
-						ntohs(clientAddr.sin_port), static_cast<unsigned int>(clientSockets.size()));
+					if (addClient(hClientSocket))
+						WriteProcessLog(pDlg, _T("Socket客户端已连接：127.0.0.1:%u，当前连接数=%u"),
+							ntohs(clientAddr.sin_port), static_cast<unsigned int>(clientSockets.size()));
 				}
 			}
 		}
@@ -402,9 +622,7 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 			const int nReceived = recv(hClientSocket, szBuffer, sizeof(szBuffer), 0);
 			if (nReceived <= 0)
 			{
-				closesocket(hClientSocket);
-				clientSockets.erase(clientSockets.begin() + i);
-				receiveBuffers.erase(receiveBuffers.begin() + i);
+				removeClient(i);
 				WriteProcessLog(pDlg, _T("Socket客户端已断开，当前连接数=%u"),
 					static_cast<unsigned int>(clientSockets.size()));
 				continue;
@@ -424,7 +642,8 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 			else
 			{
 				size_t nLineEnd = std::string::npos;
-				while ((nLineEnd = receiveBuffers[i].find('\n')) != std::string::npos)
+				while (InterlockedCompareExchange(&pDlg->m_lStopSocketServer, 0, 0) == 0 &&
+					(nLineEnd = receiveBuffers[i].find('\n')) != std::string::npos)
 				{
 					std::string command = receiveBuffers[i].substr(0, nLineEnd);
 					receiveBuffers[i].erase(0, nLineEnd + 1);
@@ -434,7 +653,34 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 					{
 						command.erase(command.size() - 1);
 					}
-					if (_stricmp(command.c_str(), "FLASH") == 0)
+					if (_stricmp(command.c_str(), "HELLO PLC") == 0)
+					{
+						const char szReply[] = "OK HELLO PLC\r\n";
+						if (send(hClientSocket, szReply, sizeof(szReply) - 1, 0) == sizeof(szReply) - 1)
+						{
+							pythonPeers[i] = TRUE;
+							WriteProcessLog(pDlg, _T("Python通信通道已识别（%s）"),
+								hClientSocket == hReverseSocket ? _T("MFC主动连接") : _T("Python主动连接"));
+							const LONG nRequest = InterlockedCompareExchange(&pDlg->m_lPythonProbeRequest, 0, 0);
+							if (nRequest > 0 && !SendPythonProbe(hClientSocket, nRequest))
+								shutdown(hClientSocket, SD_BOTH);
+						}
+						else
+							shutdown(hClientSocket, SD_BOTH);
+					}
+					else if (_strnicmp(command.c_str(), "PONG TOKEN=", 11) == 0)
+					{
+						LONG nToken = 0;
+						char chExtra = 0;
+						if (pythonPeers[i] && sscanf_s(command.c_str(), "PONG TOKEN=%ld %c",
+							&nToken, &chExtra, 1) == 1 && nToken > 0 &&
+							nToken == InterlockedCompareExchange(&pDlg->m_lPythonProbeRequest, 0, 0))
+						{
+							InterlockedExchange(&pDlg->m_lPythonProbeReply, nToken);
+							WriteProcessLog(pDlg, _T("收到Python通信确认：TOKEN=%ld"), nToken);
+						}
+					}
+					else if (_stricmp(command.c_str(), "FLASH") == 0)
 					{
 						if (!::IsWindow(pDlg->GetSafeHwnd()))
 						{
@@ -505,7 +751,9 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 								{
 									const DWORD dwWaitMilliseconds =
 										static_cast<DWORD>(fSeconds * 1000.0) + 5000;
-									if (WaitForSingleObject(request.hCompletedEvent,
+									HANDLE waitHandles[] = { request.hCompletedEvent,
+										pDlg->m_SocketStopEvent.m_hObject };
+									if (WaitForMultipleObjects(2, waitHandles, FALSE,
 										dwWaitMilliseconds) != WAIT_OBJECT_0)
 									{
 										request.nError = 5;
@@ -552,6 +800,8 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 	}
 	clientSockets.clear();
 	receiveBuffers.clear();
+	pythonPeers.clear();
+	InterlockedExchange(&pDlg->m_lPythonProbeReply, 0);
 	if (pDlg->m_hListenSocket == hListenSocket)
 	{
 		closesocket(hListenSocket);
@@ -645,6 +895,7 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	, m_bCloseAutoCheck(FALSE)
 	, m_szPrtFile(_T(""))
 	, m_bEnableInkWacth(FALSE)
+	, m_SocketStopEvent(FALSE, TRUE)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 	m_bJobStarted = false;
@@ -652,6 +903,10 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_bSocketLogEnabled = FALSE;
 	m_bStopMonitor = false;
 	m_lStopSocketServer = 1;
+	m_lPythonProbeRequest = 0;
+	m_lPythonProbeReply = 0;
+	m_bCheckingPythonConnection = FALSE;
+	m_bClosing = FALSE;
 	m_hListenSocket = INVALID_SOCKET;
 	m_pSocketServerThread = NULL;
 	m_bSocketInitialized = FALSE;
@@ -898,6 +1153,18 @@ BOOL CNetScanDemoDlg::InitDeviceInfo()
 				  // 异常: OCX 属性页应返回 FALSE
 }
 
+
+void CNetScanDemoDlg::OnOK()
+{
+	m_bClosing = TRUE;
+	CDialogEx::OnOK();
+}
+
+void CNetScanDemoDlg::OnCancel()
+{
+	m_bClosing = TRUE;
+	CDialogEx::OnCancel();
+}
 
 BOOL CNetScanDemoDlg::PreTranslateMessage(MSG* pMsg)
 {
@@ -1260,12 +1527,24 @@ UINT CNetScanDemoDlg::MonitorThread(LPVOID lpvoid)
 // 启动打印按钮
 void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 {
+	if (m_bCheckingPythonConnection || m_bClosing)
+		return;
 	WriteProcessLog(this, _T("按钮操作：%s"),
 		m_bJobStarted ? _T("停止任务") : _T("启动任务"));	
 
 	if (!m_bJobStarted)
 	{
 		UpdateData(TRUE);
+#ifdef _DEBUG
+		// 未加载数据且没有可预览图片时，使用调试数据；不覆盖已选的有效图片目录。
+		if (!m_bImageLoaded && m_PrintLayers.empty() && m_ImgPreView.m_hBmp == NULL)
+		{
+			m_szPrtFile = _T("C:\\Users\\ShanghaiTech\\Desktop\\打印文件\\喷头状态图 - 1280");
+			m_PrtFolderBrowse.SetWindowText(m_szPrtFile);
+			WriteProcessLog(this, _T("Debug：未加载图片数据，自动选择打印目录：%s"),
+				static_cast<LPCTSTR>(m_szPrtFile));
+		}
+#endif
 		if (g_PrtImgLayer.nImgType != 0)
 		{
 			AfxMessageBox(_T("文件夹分层打印仅支持 BMP 图片类型，请先在图层设置中选择 BMP。"));
@@ -1287,6 +1566,9 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 		dlg.m_nImageLayerCount=m_nJobImgLayerCnts;
 		if (dlg.DoModal() == IDOK) 
 		{
+			// Debug和Release均必须收到本次探测的Python回包，才允许启动SDK任务。
+			if (!EnsurePythonCommunication() || m_bClosing)
+				return;
 			ResetSinglePassProgress();
 			m_bJobStarted = true;
 			m_bImageLoaded = FALSE;
@@ -1630,6 +1912,8 @@ BOOL CNetScanDemoDlg::LoadLayerData(const PrintLayerFolder& layer, CString& szEr
 #include "CImgLayerSetDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
 {
+	if (m_bCheckingPythonConnection || m_bClosing)
+		return;
 	
 	UpdateData();
 	CString szErr;
@@ -1680,6 +1964,62 @@ static LPCTSTR GetPassProcStateText(unsigned int nProcState)
 	}
 }
 
+
+// 保留原有编码器判定，只增加诊断；不能用机械回程日志替代喷印同步条件。
+static BOOL WaitForPassEncoder(CNetScanDemoDlg* pDlg, int nLayer, int nPass,
+	BOOL bWaitForDeparture)
+{
+	const LPCTSTR pszStage = bWaitForDeparture ? _T("离开零位") : _T("返回零位左侧");
+	const unsigned int nThreshold = ZERO_POSITION + (bWaitForDeparture ? 100 : 0);
+	const DWORD dwStartTick = GetTickCount();
+	DWORD dwLastLogTick = dwStartTick;
+	unsigned int nEncoder = DEV_GetPrinterEncValue();
+	const unsigned int nInitialEncoder = nEncoder;
+	unsigned int nMinEncoder = nEncoder;
+	unsigned int nMaxEncoder = nEncoder;
+	WriteProcessLog(pDlg,
+		_T("图层%d PASS %d：开始等待编码器%s，ENC=0x%08X (%u)，要求 %s 0x%08X (%u)，ZERO=0x%08X"),
+		nLayer, nPass, pszStage, nEncoder, nEncoder,
+		bWaitForDeparture ? _T(">") : _T("<="), nThreshold, nThreshold,
+		static_cast<unsigned int>(ZERO_POSITION));
+
+	while (pDlg->m_bJobStarted)
+	{
+		// 首次采样也参与判定，避免日志前观察到越界、日志后回程而漏掉该次越界。
+		if (nEncoder < nMinEncoder)
+			nMinEncoder = nEncoder;
+		if (nEncoder > nMaxEncoder)
+			nMaxEncoder = nEncoder;
+		const DWORD dwNow = GetTickCount();
+		const BOOL bReached = bWaitForDeparture
+			? nEncoder > nThreshold : nEncoder <= nThreshold;
+		if (bReached)
+		{
+			WriteProcessLog(pDlg,
+				_T("图层%d PASS %d：编码器%s条件满足，ENC=0x%08X (%u)，耗时=%lu ms，采样范围=0x%08X~0x%08X"),
+				nLayer, nPass, pszStage, nEncoder, nEncoder, dwNow - dwStartTick,
+				nMinEncoder, nMaxEncoder);
+			return TRUE;
+		}
+		if (dwNow - dwLastLogTick >= 1000)
+		{
+			WriteProcessLog(pDlg,
+				_T("图层%d PASS %d：仍等待编码器%s，ENC=0x%08X (%u)，相对本阶段起点变化=%I64d，要求 %s 0x%08X，已等待=%lu ms，采样范围=0x%08X~0x%08X"),
+				nLayer, nPass, pszStage, nEncoder, nEncoder,
+				static_cast<__int64>(nEncoder) - nInitialEncoder,
+				bWaitForDeparture ? _T(">") : _T("<="), nThreshold,
+				dwNow - dwStartTick, nMinEncoder, nMaxEncoder);
+			dwLastLogTick = dwNow;
+		}
+		Sleep(1);
+		nEncoder = DEV_GetPrinterEncValue();
+	}
+
+	WriteProcessLog(pDlg,
+		_T("图层%d PASS %d：任务停止，退出编码器%s等待，最后ENC=0x%08X (%u)"),
+		nLayer, nPass, pszStage, nEncoder, nEncoder);
+	return FALSE;
+}
 
 #define DP0(fmt) {TCHAR sOut[256];_stprintf_s(sOut,_T(fmt));OutputDebugString(sOut);} 
 UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
@@ -1834,6 +2174,11 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 				WriteProcessLog(pdlg, _T("PASS %d/%d就绪：状态=%s，步进=%d um，空=%d"),
 					i + 1, nPassCount, GetPassProcStateText(pPrtPassDes->nProcState),
 					pPrtPassDes->nStpVector, pPrtPassDes->bIsNullPass ? 1 : 0);
+				const unsigned int nReadyEncoder = DEV_GetPrinterEncValue();
+				WriteProcessLog(pdlg,
+					_T("图层%d PASS %d：通知运动端前ENC=0x%08X (%u)，SDK打印方向=%d，SDK起喷编码位置=%u"),
+					n + 1, i + 1, nReadyEncoder, nReadyEncoder,
+					pPrtPassDes->bEncPrtDir ? 1 : 0, pPrtPassDes->nStartEncPos);
 				pdlg->NotifySocketPassReadyEvent(i + 1, nPassCount,
 					pPrtPassDes->nStpVector, pPrtPassDes->fYMinJetImgPos,
 					pPrtPassDes->bIsNullPass);
@@ -1909,20 +2254,14 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 
 
 
-					//先等待编码器离开零位，避免初始位置等于ZERO_POSITION时直接进入下一PASS。
-					while (pdlg->m_bJobStarted && DEV_GetPrinterEncValue() <= ZERO_POSITION + 100)
-					{
-						Sleep(1);
-					}
-					//等待编码器回到零位左侧，替代原先每个PASS后的人工确认弹窗。
-					while (pdlg->m_bJobStarted && DEV_GetPrinterEncValue() > ZERO_POSITION)
-					{
-						Sleep(1);
-					}
-					if (!pdlg->m_bJobStarted)
+					// 依次等待越过正向门槛、返回零位左侧；每秒输出当前编码和采样范围。
+					if (!WaitForPassEncoder(pdlg, n + 1, i + 1, TRUE) ||
+						!WaitForPassEncoder(pdlg, n + 1, i + 1, FALSE))
 					{
 						break;
 					}
+					WriteProcessLog(pdlg, _T("图层%d PASS %d：编码器往返确认完成，准备处理下一PASS"),
+						n + 1, i + 1);
 				}
 			}
 				
@@ -2149,6 +2488,8 @@ void CNetScanDemoDlg::OnBnClickedButtonResetEncoder()
 
 void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 {
+	if (m_bCheckingPythonConnection || m_bClosing)
+		return;
 	// TODO:  如果该控件是 RICHEDIT 控件，它将不
 	// 发送此通知，除非重写 CDialogEx::OnInitDialog()
 	// 函数并调用 CRichEditCtrl().SetEventMask()，
@@ -2212,6 +2553,7 @@ void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 
 void CNetScanDemoDlg::OnDestroy()
 {
+	m_bClosing = TRUE;
 	StopAutoPressInk(TRUE);
 	if (m_pSocketPressInkRequest != NULL)
 	{
@@ -2502,6 +2844,11 @@ LRESULT CNetScanDemoDlg::OnSocketFlashControl(WPARAM wParam, LPARAM lParam)
 	SocketFlashResult* pResult = reinterpret_cast<SocketFlashResult*>(lParam);
 	if (pResult == NULL)
 		return 0;
+	if (m_bClosing || InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) != 0)
+	{
+		pResult->nError = 2;
+		return 0;
+	}
 	WriteProcessLog(this, _T("主线程执行Socket闪喷命令"));
 	pResult->nError = ExecuteFlashToggle(FALSE,
 		&pResult->bBeforeState, &pResult->bAfterState);
@@ -2526,6 +2873,12 @@ LRESULT CNetScanDemoDlg::OnSocketPressInkControl(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
+	if (m_bClosing || InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) != 0)
+	{
+		pRequest->nError = 3;
+		SetEvent(pRequest->hCompletedEvent);
+		return 0;
+	}
 	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
 	{
 		pRequest->nError = 2;

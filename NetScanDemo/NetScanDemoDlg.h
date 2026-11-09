@@ -51,6 +51,8 @@ public:
 	protected:
 	virtual void DoDataExchange(CDataExchange* pDX);	// DDX/DDV support
 	virtual BOOL PreTranslateMessage(MSG* pMsg);
+	virtual void OnOK();
+	virtual void OnCancel();
 	CToolTipCtrl m_ToolTip;
 public:
 	bool m_bJobStarted;
@@ -77,6 +79,11 @@ public:
 	CString m_szImageInfo2Base;
 	BOOL m_bStopMonitor;
 	volatile LONG m_lStopSocketServer;
+	volatile LONG m_lPythonProbeRequest;
+	volatile LONG m_lPythonProbeReply;
+	BOOL m_bCheckingPythonConnection;
+	BOOL m_bClosing;
+	CEvent m_SocketStopEvent;
 	SOCKET m_hListenSocket;
 	CWinThread* m_pSocketServerThread;
 	BOOL m_bSocketInitialized;
@@ -112,6 +119,7 @@ public:
 	static UINT MonitorThread(LPVOID lpvoid);
 	static UINT SocketServerThread(LPVOID lpvoid);
 	BOOL StartSocketServer();
+	BOOL EnsurePythonCommunication();
 	void StopSocketServer();
 	void QueueSocketEvent(const std::string& eventText);
 	void NotifySocketStartEvent(int nTotalLayers);
