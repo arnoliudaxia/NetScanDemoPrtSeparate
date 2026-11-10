@@ -30,6 +30,9 @@
     <ClInclude Include="NetScanDemoDlg.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="FolderPrintConfig.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="stdafx.h">
       <Filter>Header Files</Filter>
     </ClInclude>

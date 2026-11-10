@@ -1024,6 +1024,7 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_nSinglePassIndex = -1;
 	m_nSinglePassInitialCols = 0;
 	m_bImageLoaded=FALSE;
+	m_bFolderConfigApplied = FALSE;
 	for(int c=0;c<MAX_COLORS;c++)
 		m_pPrtData[c]=NULL;
 
@@ -1255,12 +1256,24 @@ BOOL CNetScanDemoDlg::InitDeviceInfo()
 
 void CNetScanDemoDlg::OnOK()
 {
+	if (m_bJobStarted || m_bPrinting)
+	{
+		AfxMessageBox(_T("请先停止打印任务，等待清理完成后再退出。"));
+		return;
+	}
+	RestoreFolderPrintConfig();
 	m_bClosing = TRUE;
 	CDialogEx::OnOK();
 }
 
 void CNetScanDemoDlg::OnCancel()
 {
+	if (m_bJobStarted || m_bPrinting)
+	{
+		AfxMessageBox(_T("请先停止打印任务，等待清理完成后再退出。"));
+		return;
+	}
+	RestoreFolderPrintConfig();
 	m_bClosing = TRUE;
 	CDialogEx::OnCancel();
 }
@@ -1634,6 +1647,9 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 
 	if (!m_bJobStarted)
 	{
+		// 停止后仍须等待工作线程清理及UI恢复，不能覆盖上一任务的参数快照。
+		if (m_bPrinting)
+			return;
 		UpdateData(TRUE);
 #ifdef _DEBUG
 		// 未加载数据且没有可预览图片时，使用调试数据；不覆盖已选的有效图片目录。
@@ -1647,12 +1663,20 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 #endif
 		if (g_PrtImgLayer.nImgType != 0)
 		{
+			RestoreFolderPrintConfig();
 			AfxMessageBox(_T("文件夹分层打印仅支持 BMP 图片类型，请先在图层设置中选择 BMP。"));
 			return;
 		}
 
 		CString szErr;
 		if (!ScanPrintRoot(m_szPrtFile, szErr))
+		{
+			RestoreFolderPrintConfig();
+			AfxMessageBox(szErr);
+			return;
+		}
+		// 每次启动重新读取，支持同目录再次打印及选择目录后修改配置。
+		if (!ApplyFolderPrintConfig(m_szPrtFile, szErr))
 		{
 			AfxMessageBox(szErr);
 			return;
@@ -1668,12 +1692,17 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 		{
 			// Debug和Release均必须收到本次探测的Python回包，才允许启动SDK任务。
 			if (!EnsurePythonCommunication() || m_bClosing)
+			{
+				RestoreFolderPrintConfig();
 				return;
+			}
 			ResetSinglePassProgress();
 			m_bJobStarted = true;
+			// 从创建线程前一直保持到完成消息被UI处理，包含启动与停止清理阶段。
+			m_bPrinting = true;
 			m_bImageLoaded = FALSE;
 			m_PrtFolderBrowse.EnableWindow(FALSE);
-			GetDlgItem(IDC_BUTTON_LOADIMG)->EnableWindow(true);
+			GetDlgItem(IDC_BUTTON_LOADIMG)->EnableWindow(FALSE);
 			GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("停止任务"));
 			g_PrtImgLayer.nLayerIndex = -1;
 			WriteProcessLog(this, _T("启动顺序打印线程：图层数=%d"), m_nJobImgLayerCnts);
@@ -1682,6 +1711,8 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 			if (pPrintThread == NULL)
 			{
 				m_bJobStarted = false;
+				m_bPrinting = false;
+				RestoreFolderPrintConfig();
 				UpdateButtonState();
 				AfxMessageBox(_T("创建打印线程失败。"));
 				return;
@@ -1693,6 +1724,10 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 				pApp->SaveJobParam();
 			}
 		}
+		else
+		{
+			RestoreFolderPrintConfig();
+		}
 	}
 	else 
 	{
@@ -1700,7 +1735,8 @@ void CNetScanDemoDlg::OnBnClickedButtonStartjob()
 		IDP_StopPrintJob();
 		m_bJobStarted = false;
 		ResetSinglePassProgress();
-		GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("启动任务"));
+		GetDlgItem(IDC_BUTTON_STARTJOB)->SetWindowText(_T("正在停止..."));
+		GetDlgItem(IDC_BUTTON_STARTJOB)->EnableWindow(FALSE);
 	}
 }
 
@@ -2012,22 +2048,30 @@ BOOL CNetScanDemoDlg::LoadLayerData(const PrintLayerFolder& layer, CString& szEr
 #include "CImgLayerSetDlg.h"
 void CNetScanDemoDlg::OnBnClickedButtonLoadimg()
 {
-	if (m_bCheckingPythonConnection || m_bClosing)
+	if (m_bCheckingPythonConnection || m_bClosing || m_bJobStarted || m_bPrinting)
 		return;
-	
+
 	UpdateData();
-	CString szErr;
-	int nResult = 0;
 	CImgLayerSetDlg dlg;
-	dlg.DoModal();
+	if (dlg.DoModal() != IDOK)
+		return;
 	CNetScanDemoApp* pApp = (CNetScanDemoApp*)AfxGetApp();
-	if (pApp) {
-		pApp->SaveLayerParam();
-	}
-	/*
-	if (dlg.DoModal() == IDOK) 
+	if (pApp)
 	{
-	}*/
+		// 允许查看/调整其他图层参数，但文件夹的临时值不能污染pmc.dat。
+		PRTIMG_LAYER savedLayer = g_PrtImgLayer;
+		if (m_bFolderConfigApplied)
+		{
+			if (m_OriginalFolderPrintConfig.hasXDpi)
+				savedLayer.nXDPI = m_OriginalFolderPrintConfig.xdpi;
+			if (m_OriginalFolderPrintConfig.hasYDpi)
+				savedLayer.nYDPI = m_OriginalFolderPrintConfig.ydpi;
+			if (m_OriginalFolderPrintConfig.hasInkRatio)
+				savedLayer.nInkMultication = m_OriginalFolderPrintConfig.inkRatio;
+		}
+		pApp->SaveLayerParam(&savedLayer);
+	}
+	UpdatePreviewImageInfo();
 }
 //
 //WriteDataThread
@@ -2146,7 +2190,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 	{
 		szErr.Format(_T("启动任务失败，错误号为：%d"), nStartJobResult);
 		AfxMessageBox(szErr);
-		pdlg->m_bPrinting = false;
+		// 由UI完成消息统一恢复临时参数并解除运行锁。
 		pdlg->m_bJobStarted = false;
 		pdlg->PostMessage(WM_PRINT_JOB_FINISHED, 0, 0);
 		return -1;
@@ -2240,6 +2284,12 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 				//::OutputDebugString(_T("[RYZ] start IDP_GetPassItem3333333333333333333"));
 				do
 				{
+					// SDK尚未返回PASS对象时也必须能停止，随后才能清理和恢复配置。
+					if (!pdlg->m_bJobStarted)
+					{
+						pPrtPassDes = NULL;
+						break;
+					}
 					//::OutputDebugString(_T("[RY] Start Query Pass!"));
 					pPrtPassDes=::IDP_GetPassItem(n,i);
 					//memset(buf,0,sizeof(buf));
@@ -2387,8 +2437,7 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 	if (bAllLayersCompleted)
 	{
 		WriteProcessLog(pdlg, _T("全部图层处理结束，停止打印任务"));
-		pdlg->NotifySocketPrintJobCompletedEvent(pdlg->m_nJobImgLayerCnts);
-		AfxMessageBox(_T("打印完成"));
+		// 完成通知和提示移到UI清理之后，保证看到完成时参数已经恢复。
 	}
 	else
 	{
@@ -2402,19 +2451,24 @@ UINT  CNetScanDemoDlg::PrintThread(LPVOID pvoid)
 	DEM_MoveX(FALSE, nSpd, ndistance, TRUE, g_movConfig.fxMovRate);
 #endif
 
-	pdlg->m_bPrinting = false;
 	pdlg->m_bJobStarted=false;//notify windows
-	pdlg->PostMessage(WM_PRINT_JOB_FINISHED, 0, 0);
+	pdlg->PostMessage(WM_PRINT_JOB_FINISHED, bAllLayersCompleted ? 1 : 0, 0);
 	AfxEndThread(0, TRUE);
 	return 0;
 }
 
 LRESULT CNetScanDemoDlg::OnPrintJobFinished(WPARAM wParam, LPARAM lParam)
 {
-	UNREFERENCED_PARAMETER(wParam);
 	UNREFERENCED_PARAMETER(lParam);
+	RestoreFolderPrintConfig();
+	m_bPrinting = false;
 	ResetSinglePassProgress();
 	UpdateButtonState();
+	if (wParam != 0)
+	{
+		NotifySocketPrintJobCompletedEvent(m_nJobImgLayerCnts);
+		AfxMessageBox(_T("打印完成"));
+	}
 	return 0;
 }
 
@@ -2426,6 +2480,8 @@ void CNetScanDemoDlg::UpdateButtonState()
 	if(pWnd)
 		pWnd->SetWindowText(m_bJobStarted?_T("结束任务"):_T("启动任务"));
 	m_PrtFolderBrowse.EnableWindow(TRUE);
+	GetDlgItem(IDC_BUTTON_LOADIMG)->EnableWindow(TRUE);
+	GetDlgItem(IDC_BUTTON_STARTJOB)->EnableWindow(TRUE);
 }
 
 #include "CRelaodWaveDlg.h"
@@ -2607,74 +2663,151 @@ void CNetScanDemoDlg::OnBnClickedButtonResetEncoder()
 		AfxMessageBox(_T("编码器复位失败。"));
 }
 
+BOOL CNetScanDemoDlg::ApplyFolderPrintConfig(const CString& szRootPath, CString& szError)
+{
+	// 只能在UI空闲时切换覆盖；先恢复，避免目录B继承目录A的临时值。
+	RestoreFolderPrintConfig();
+	CString szConfigPath = szRootPath;
+	szConfigPath.Trim();
+	szConfigPath.TrimRight(_T("\\/"));
+	if (szConfigPath.IsEmpty())
+		return TRUE;
+	szConfigPath += _T("\\config.json");
+	const DWORD nAttributes = ::GetFileAttributes(szConfigPath);
+	if (nAttributes == INVALID_FILE_ATTRIBUTES)
+	{
+		const DWORD nError = ::GetLastError();
+		if (nError == ERROR_FILE_NOT_FOUND || nError == ERROR_PATH_NOT_FOUND)
+			return TRUE;
+		szError.Format(_T("无法检查文件夹配置（错误%lu）：\r\n%s"),
+			nError, static_cast<LPCTSTR>(szConfigPath));
+		return FALSE;
+	}
+	if ((nAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+	{
+		szError.Format(_T("config.json 必须是文件：\r\n%s"), static_cast<LPCTSTR>(szConfigPath));
+		return FALSE;
+	}
+
+	FolderPrintConfig config;
+	try
+	{
+		CFile file;
+		CFileException error;
+		if (!file.Open(szConfigPath, CFile::modeRead | CFile::shareDenyWrite, &error))
+		{
+			szError.Format(_T("无法读取文件夹配置：\r\n%s"), static_cast<LPCTSTR>(szConfigPath));
+			return FALSE;
+		}
+		const ULONGLONG nLength = file.GetLength();
+		if (nLength == 0 || nLength > 64 * 1024)
+		{
+			szError = _T("config.json 不能为空，且不能超过64KB。");
+			return FALSE;
+		}
+		std::string text(static_cast<size_t>(nLength), '\0');
+		if (file.Read(&text[0], static_cast<UINT>(nLength)) != nLength)
+		{
+			szError = _T("读取 config.json 不完整，请重新加载目录。");
+			return FALSE;
+		}
+		std::string parseError;
+		if (!FolderPrintConfigParser::Parse(text, config, parseError))
+		{
+			const CString szDetail(parseError.c_str());
+			szError.Format(_T("文件夹配置无效：\r\n%s\r\n%s"),
+				static_cast<LPCTSTR>(szConfigPath), static_cast<LPCTSTR>(szDetail));
+			return FALSE;
+		}
+	}
+	catch (CFileException* pError)
+	{
+		pError->Delete();
+		szError.Format(_T("读取文件夹配置失败：\r\n%s"), static_cast<LPCTSTR>(szConfigPath));
+		return FALSE;
+	}
+	if (!config.HasOverrides())
+		return TRUE;
+
+	m_OriginalFolderPrintConfig = config;
+	m_OriginalFolderPrintConfig.xdpi = g_PrtImgLayer.nXDPI;
+	m_OriginalFolderPrintConfig.ydpi = g_PrtImgLayer.nYDPI;
+	m_OriginalFolderPrintConfig.inkRatio = g_PrtImgLayer.nInkMultication;
+	if (config.hasXDpi) g_PrtImgLayer.nXDPI = config.xdpi;
+	if (config.hasYDpi) g_PrtImgLayer.nYDPI = config.ydpi;
+	if (config.hasInkRatio) g_PrtImgLayer.nInkMultication = config.inkRatio;
+	m_bFolderConfigApplied = TRUE;
+	WriteProcessLog(this, _T("文件夹临时设置：XDPI=%g，YDPI=%ld，墨量=%u倍；来源：%s"),
+		g_PrtImgLayer.nXDPI, g_PrtImgLayer.nYDPI, g_PrtImgLayer.nInkMultication,
+		static_cast<LPCTSTR>(szConfigPath));
+	UpdatePreviewImageInfo();
+	return TRUE;
+}
+
+void CNetScanDemoDlg::RestoreFolderPrintConfig()
+{
+	if (!m_bFolderConfigApplied)
+		return;
+	if (m_OriginalFolderPrintConfig.hasXDpi)
+		g_PrtImgLayer.nXDPI = m_OriginalFolderPrintConfig.xdpi;
+	if (m_OriginalFolderPrintConfig.hasYDpi)
+		g_PrtImgLayer.nYDPI = m_OriginalFolderPrintConfig.ydpi;
+	if (m_OriginalFolderPrintConfig.hasInkRatio)
+		g_PrtImgLayer.nInkMultication = m_OriginalFolderPrintConfig.inkRatio;
+	m_bFolderConfigApplied = FALSE;
+	WriteProcessLog(this, _T("已恢复原图层设置：XDPI=%g，YDPI=%ld，墨量=%u倍"),
+		g_PrtImgLayer.nXDPI, g_PrtImgLayer.nYDPI, g_PrtImgLayer.nInkMultication);
+	UpdatePreviewImageInfo();
+}
+
+void CNetScanDemoDlg::UpdatePreviewImageInfo()
+{
+	CString szPreviewFile = m_szPrtFile;
+	szPreviewFile.TrimRight(_T("\\/"));
+	szPreviewFile += _T("\\1\\1.bmp");
+	LONG nWidth = 0, nHeight = 0, nBytesPerLine = 0;
+	int nDataSize = 0;
+	CString szError;
+	if (!m_szPrtFile.IsEmpty() && ReadBmpMetadata(szPreviewFile,
+		nWidth, nHeight, nBytesPerLine, nDataSize, szError))
+	{
+		if (g_PrtImgLayer.nXDPI > 0 && g_PrtImgLayer.nYDPI > 0)
+			m_szImageInfo2Base.Format(_T("%ldx%ld X:%.3fmm Y:%.3fmm"), nWidth, nHeight,
+				static_cast<double>(nWidth) / g_PrtImgLayer.nXDPI * 25.4,
+				static_cast<double>(nHeight) / g_PrtImgLayer.nYDPI * 25.4);
+		else
+			m_szImageInfo2Base.Format(_T("%ldx%ld XDPI/YDPI无效"), nWidth, nHeight);
+	}
+	else
+		m_szImageInfo2Base = _T("请选择包含 1\\1.bmp 的打印根文件夹");
+	UpdateImageInfo2();
+}
+
 void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
 {
-	if (m_bCheckingPythonConnection || m_bClosing)
+	if (m_bCheckingPythonConnection || m_bClosing || m_bJobStarted || m_bPrinting)
 		return;
-	// TODO:  如果该控件是 RICHEDIT 控件，它将不
-	// 发送此通知，除非重写 CDialogEx::OnInitDialog()
-	// 函数并调用 CRichEditCtrl().SetEventMask()，
-	// 同时将 ENM_CHANGE 标志“或”运算到掩码中。
-
-	// TODO:  在此添加控件通知处理程序代码
 	UpdateData();
 	m_PrintLayers.clear();
 	m_nCurrentDataChannelCount = 0;
 	m_nCurrentPassCount = -1;
-	CString  szText;
+	CString szError;
+	if (!ApplyFolderPrintConfig(m_szPrtFile, szError))
+		WriteProcessLog(this, _T("加载文件夹配置失败：%s"), static_cast<LPCTSTR>(szError));
 	CString szPreviewFile = m_szPrtFile;
-	while (szPreviewFile.GetLength() > 3 &&
-		(szPreviewFile.Right(1) == _T("\\") || szPreviewFile.Right(1) == _T("/")))
-		szPreviewFile = szPreviewFile.Left(szPreviewFile.GetLength() - 1);
+	szPreviewFile.TrimRight(_T("\\/"));
 	szPreviewFile += _T("\\1\\1.bmp");
 	m_ImgPreView.ShowPreview(szPreviewFile);
-	if (m_ImgPreView.m_hBmp)
-	{
-		CFile file;
-		BITMAPFILEHEADER   bmpfileheader;
-		BITMAPINFOHEADER   bmpinfoheader;
-		if (file.Open(szPreviewFile, CFile::modeRead))
-		{
-			file.Read(&bmpfileheader, sizeof(BITMAPFILEHEADER));
-			file.Read(&bmpinfoheader, sizeof(BITMAPINFOHEADER));
-			const long nPixelHeight = bmpinfoheader.biHeight < 0
-				? -bmpinfoheader.biHeight
-				: bmpinfoheader.biHeight;
-			if (g_PrtImgLayer.nXDPI > 0 && g_PrtImgLayer.nYDPI > 0)
-			{
-				const double fXActualWidth =
-					static_cast<double>(bmpinfoheader.biWidth) / g_PrtImgLayer.nXDPI * 25.4;
-				const double fYActualHeight =
-					static_cast<double>(nPixelHeight) / g_PrtImgLayer.nYDPI * 25.4;
-				szText.Format(_T("%dx%d X:%.3fmm Y:%.3fmm"),
-					bmpinfoheader.biWidth, nPixelHeight,
-					fXActualWidth, fYActualHeight);
-			}
-			else
-			{
-				szText.Format(_T("%dx%d XDPI/YDPI无效"),
-					bmpinfoheader.biWidth, nPixelHeight);
-			}
-			if (bmpinfoheader.biBitCount > 1)
-				szText += _T(" \r\nNot Support!");
-			m_szImageInfo2Base = szText;
-			UpdateImageInfo2();
-			file.Close();
-		}
-	}
-	else
-	{
-		m_szImageInfo2Base = _T("请选择包含 1\\1.bmp 的打印根文件夹");
-		UpdateImageInfo2();
-	}
+	UpdatePreviewImageInfo();
 	m_bImageLoaded = FALSE;
 }
-
 
 
 void CNetScanDemoDlg::OnDestroy()
 {
 	m_bClosing = TRUE;
+	if (!m_bPrinting)
+		RestoreFolderPrintConfig();
 	StopAutoPressInk(TRUE);
 	if (m_pSocketPressInkRequest != NULL)
 	{

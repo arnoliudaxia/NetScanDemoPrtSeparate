@@ -195,7 +195,7 @@ int CNetScanDemoApp::LoadMoveParam() {
 }
 #endif
 
-int CNetScanDemoApp::SaveLayerParam()
+int CNetScanDemoApp::SaveLayerParam(const PRTIMG_LAYER* pLayer)
 {
 
 	CFile file;
@@ -216,7 +216,7 @@ int CNetScanDemoApp::SaveLayerParam()
 
 
 
-	file.Write(&g_PrtImgLayer, sizeof(PRTIMG_LAYER));
+	file.Write(pLayer != NULL ? pLayer : &g_PrtImgLayer, sizeof(PRTIMG_LAYER));
 
 
 	file.Close();

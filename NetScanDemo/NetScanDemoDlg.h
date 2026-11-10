@@ -7,6 +7,7 @@
 #define _MAX_LAYER_CNT 100
 #include "RyTreeListCtl.h"
 #include "PicScreen.h"
+#include "FolderPrintConfig.h"
 #include <atlimage.h>
 #include <afxmt.h>
 #include <string>
@@ -103,6 +104,8 @@ public:
 	DWORD m_dwAutoPressInkStartTick;
 	DWORD m_dwAutoPressInkNextTick;
 	BOOL m_bImageLoaded;
+	BOOL m_bFolderConfigApplied;
+	FolderPrintConfig m_OriginalFolderPrintConfig;
 	LPBYTE m_pPrtData[MAX_COLORS];
 	std::vector<PrintLayerFolder> m_PrintLayers;
 
@@ -147,6 +150,9 @@ public:
 	void UpdateSinglePassProgress(const PrtRunInfo& prtInfo);
 	void UpdateImageInfo2();
 	afx_msg void OnEnChangeMfcPrtFilePath();
+	BOOL ApplyFolderPrintConfig(const CString& szRootPath, CString& szError);
+	void RestoreFolderPrintConfig();
+	void UpdatePreviewImageInfo();
 	BOOL ScanPrintRoot(const CString& szRootPath, CString& szError);
 	BOOL LoadLayerData(const PrintLayerFolder& layer, CString& szError);
 	void FreeLayerData();

@@ -207,6 +207,7 @@
     <ClInclude Include="InkStateCtrl.h" />
     <ClInclude Include="NetScanDemo.h" />
     <ClInclude Include="NetScanDemoDlg.h" />
+    <ClInclude Include="FolderPrintConfig.h" />
     <ClInclude Include="PicScreen.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="RyTreeListCtl.h" />

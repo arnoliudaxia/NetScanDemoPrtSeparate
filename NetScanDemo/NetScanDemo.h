@@ -43,7 +43,7 @@ public:
 public:
 	int LoadParam(LPRYUSR_PARAM lparam);
 	int SaveParam(LPRYUSR_PARAM lparam);
-	int SaveLayerParam();
+	int SaveLayerParam(const PRTIMG_LAYER* pLayer = NULL);
 	int SaveJobParam();
 	int SaveCalibrationParam();
 	int LoadLayerParam();
