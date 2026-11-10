@@ -1,28 +1,30 @@
-ï»¿#pragma once
+#pragma once
 
 
-// CRelaodWaveDlg å¯¹è¯æ¡†
+// CRelaodWaveDlg ¶Ô»°¿ò
 
 class CReloadWaveDlg : public CDialogEx
 {
 	DECLARE_DYNAMIC(CReloadWaveDlg)
 
 public:
-	CReloadWaveDlg(CWnd* pParent = nullptr);   // æ ‡å‡†æ„é€ å‡½æ•°
+	CReloadWaveDlg(CWnd* pParent = nullptr);   // ±ê×¼¹¹Ôìº¯Êı
 	virtual ~CReloadWaveDlg();
 
-// å¯¹è¯æ¡†æ•°æ®
+// ¶Ô»°¿òÊı¾İ
 #ifdef AFX_DESIGN_TIME
 	enum { IDD = IDD_DLG_RELOAD_WAVE };
 #endif
 
 protected:
-	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV æ”¯æŒ
+	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV Ö§³Ö
+	virtual void OnOK();
 
 	DECLARE_MESSAGE_MAP()
 public:
 	int m_nColorIndex;
 	int m_nGroupIndex;
 	CString m_szWavePath;
+	CMFCEditBrowseCtrl m_WavePathBrowse;
 	virtual BOOL OnInitDialog();
 };

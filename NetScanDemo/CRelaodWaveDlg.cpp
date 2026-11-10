@@ -1,4 +1,4 @@
-ï»¿// CRelaodWaveDlg.cpp: å®ç°æ–‡ä»¶
+// CRelaodWaveDlg.cpp: ÊµÏÖÎÄ¼ş
 //
 
 #include "stdafx.h"
@@ -7,7 +7,7 @@
 #include "afxdialogex.h"
 
 
-// CRelaodWaveDlg å¯¹è¯æ¡†
+// CRelaodWaveDlg ¶Ô»°¿ò
 
 IMPLEMENT_DYNAMIC(CReloadWaveDlg, CDialogEx)
 
@@ -29,6 +29,7 @@ void CReloadWaveDlg::DoDataExchange(CDataExchange* pDX)
 	CDialogEx::DoDataExchange(pDX);
 	DDX_CBIndex(pDX, IDC_COMBO_COLOR, m_nColorIndex);
 	DDX_CBIndex(pDX, IDC_COMBO_GROUP, m_nGroupIndex);
+	DDX_Control(pDX, IDC_MFCEDITBROWSE_WAVE, m_WavePathBrowse);
 	DDX_Text(pDX, IDC_MFCEDITBROWSE_WAVE, m_szWavePath);
 }
 
@@ -37,18 +38,44 @@ BEGIN_MESSAGE_MAP(CReloadWaveDlg, CDialogEx)
 END_MESSAGE_MAP()
 
 
-// CRelaodWaveDlg æ¶ˆæ¯å¤„ç†ç¨‹åº
+// CRelaodWaveDlg ÏûÏ¢´¦Àí³ÌĞò
 
+void CReloadWaveDlg::OnOK()
+{
+	if (!UpdateData(TRUE))
+		return;
+	m_szWavePath.Trim();
+	// ÎÄ¼şÉ¸Ñ¡²»ÄÜ×èÖ¹ÊÖ¹¤ÊäÈëÆäËûÀàĞÍ£¬È·ÈÏÊ±ÔÙ´ÎĞ£Ñé¡£
+	if (m_szWavePath.Right(6).CompareNoCase(_T(".rhdat")) != 0)
+	{
+		AfxMessageBox(_T("ÇëÑ¡Ôñºó×ºÃûÎª .rhdat µÄ²¨ĞÎÎÄ¼ş¡£"));
+		m_WavePathBrowse.SetFocus();
+		return;
+	}
+	const DWORD nAttributes = ::GetFileAttributes(m_szWavePath);
+	if (nAttributes == INVALID_FILE_ATTRIBUTES || (nAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+	{
+		AfxMessageBox(_T("²¨ĞÎÎÄ¼ş²»´æÔÚ»òÎŞ·¨·ÃÎÊ£¬ÇëÖØĞÂÑ¡Ôñ¡£"));
+		m_WavePathBrowse.SetFocus();
+		return;
+	}
+	// ½«È¥³ıÊ×Î²¿Õ°×ºóµÄÂ·¾¶Í¬²½»Ø¿Ø¼ş£¬±ÜÃâ»ùÀàÔÙ´ÎDDXÊ±¸²¸Ç¡£
+	m_WavePathBrowse.SetWindowText(m_szWavePath);
+	CDialogEx::OnOK();
+}
 
 BOOL CReloadWaveDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
+	m_WavePathBrowse.EnableFileBrowseButton(_T("rhdat"),
+		_T("²¨ĞÎÎÄ¼ş (*.rhdat)|*.rhdat||"),
+		OFN_HIDEREADONLY | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR);
 	CString sz;
 	CComboBox* pComboBox = (CComboBox*)GetDlgItem(IDC_COMBO_COLOR);
 	if (pComboBox) {
 		pComboBox->ResetContent();
 		for (int c = 0; c < MAX_COLORS; c++) {
-			sz.Format(_T("é¢œè‰²%d"), c);
+			sz.Format(_T("ÑÕÉ«%d"), c);
 			pComboBox->AddString(sz);
 		}
 		pComboBox->SetCurSel(0);
@@ -57,13 +84,13 @@ BOOL CReloadWaveDlg::OnInitDialog()
 	if (pComboBox) {
 		pComboBox->ResetContent();
 		for (int g = 0; g < MAX_GROUP; g++) {
-			sz.Format(_T("ç»„%d"), g);
+			sz.Format(_T("×é%d"), g);
 			pComboBox->AddString(sz);
 		}
 		pComboBox->SetCurSel(0);
 	}
-	// TODO:  åœ¨æ­¤æ·»åŠ é¢å¤–çš„åˆå§‹åŒ–
+	// TODO:  ÔÚ´ËÌí¼Ó¶îÍâµÄ³õÊ¼»¯
 
 	return TRUE;  // return TRUE unless you set the focus to a control
-				  // å¼‚å¸¸: OCX å±æ€§é¡µåº”è¿”å› FALSE
+				  // Òì³£: OCX ÊôĞÔÒ³Ó¦·µ»Ø FALSE
 }
