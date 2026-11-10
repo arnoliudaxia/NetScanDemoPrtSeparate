@@ -83,6 +83,12 @@ public:
 	volatile LONG m_lPythonProbeReply;
 	BOOL m_bCheckingPythonConnection;
 	BOOL m_bClosing;
+	LONG m_nEncoderResetToken;
+	SOCKET m_hEncoderResetOwner;
+	int m_nEncoderResetResult;
+	BOOL m_bDeviceInitialized;
+	BOOL m_bAirInkDialogOpen;
+	BOOL m_bPressInkOutputUnknown;
 	CEvent m_SocketStopEvent;
 	SOCKET m_hListenSocket;
 	CWinThread* m_pSocketServerThread;
@@ -134,6 +140,7 @@ public:
 	afx_msg void OnBnClickedButtonFlash();
 	int ExecuteFlashToggle(BOOL bShowError, BOOL* pBeforeState, BOOL* pAfterState);
 	afx_msg void OnBnClickedButtonResetEncoder();
+	BOOL ExecuteEncoderReset();
 	void UpdateButtonState();
 	void UpdatePrtState(const PrtRunInfo& prtInfo);
 	void ResetSinglePassProgress();
@@ -168,6 +175,7 @@ public:
 	afx_msg LRESULT OnAppendProcessLog(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnSocketFlashControl(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnSocketPressInkControl(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnSocketEncoderControl(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnPrintJobFinished(WPARAM wParam, LPARAM lParam);
 	CString m_szProcessLog;
 };

@@ -25,6 +25,7 @@
 #define WM_SOCKET_FLASH_CONTROL   (WM_APP + 4)
 #define WM_SOCKET_PRESS_INK_CONTROL (WM_APP + 5)
 #define WM_PRINT_JOB_FINISHED     (WM_APP + 6)
+#define WM_SOCKET_ENCODER_CONTROL (WM_APP + 7)
 
 static const UINT_PTR SOCKET_PRESS_INK_TIMER_ID = 0x1200;
 static const UINT_PTR AUTO_PRESS_INK_TIMER_ID = 0x1201;
@@ -239,6 +240,50 @@ struct SocketPressInkRequest
 	int nError;
 };
 
+enum SocketEncoderAction
+{
+	ENCODER_RESET_BEGIN,
+	ENCODER_RESET_EXECUTE,
+	ENCODER_RESET_END,
+	ENCODER_RESET_CANCEL
+};
+
+struct SocketEncoderRequest
+{
+	SocketEncoderAction action;
+	SOCKET hOwner;
+	LONG nToken;
+	const char* pszError;
+};
+
+static const char* const ENCODER_COMMAND_NAMES[] = {
+	"ENCODER_RESET_BEGIN", "RESET_ENCODER", "ENCODER_RESET_END", "ENCODER_RESET_CANCEL"
+};
+
+static int GetSocketEncoderAction(const std::string& command)
+{
+	for (int i = 0; i < _countof(ENCODER_COMMAND_NAMES); ++i)
+	{
+		const size_t nLength = strlen(ENCODER_COMMAND_NAMES[i]);
+		if (_strnicmp(command.c_str(), ENCODER_COMMAND_NAMES[i], nLength) == 0 &&
+			(command.size() == nLength || command[nLength] == ' ' || command[nLength] == '\t'))
+			return i;
+	}
+	return -1;
+}
+
+static void CancelSocketEncoderReservation(CNetScanDemoDlg* pDlg, SOCKET hOwner)
+{
+	if (::IsWindow(pDlg->GetSafeHwnd()))
+	{
+		SocketEncoderRequest request = {};
+		request.action = ENCODER_RESET_CANCEL;
+		request.hOwner = hOwner;
+		// TOKEN=0仅供本地断线清理；网络命令必须使用正整数TOKEN。
+		pDlg->SendMessage(WM_SOCKET_ENCODER_CONTROL, 0, reinterpret_cast<LPARAM>(&request));
+	}
+}
+
 BOOL CNetScanDemoDlg::StartSocketServer()
 {
 	if (m_pSocketServerThread != NULL)
@@ -279,6 +324,11 @@ BOOL CNetScanDemoDlg::EnsurePythonCommunication()
 {
 	if (m_bCheckingPythonConnection || m_bClosing)
 		return FALSE;
+	if (m_nEncoderResetToken != 0)
+	{
+		AfxMessageBox(_T("Python正在执行重置编码流程，请等待完成或在Python端停止后再启动任务。"));
+		return FALSE;
+	}
 	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
 	{
 		AfxMessageBox(_T("当前正在压墨，请等待压墨完成后再启动打印任务。"));
@@ -337,6 +387,11 @@ BOOL CNetScanDemoDlg::EnsurePythonCommunication()
 	// 断开会撤销确认；结束检查时再次核对，不能消费已知失效的快照。
 	bConfirmed = bConfirmed &&
 		InterlockedCompareExchange(&m_lPythonProbeReply, 0, 0) == nRequest;
+	if (m_nEncoderResetToken != 0)
+	{
+		WriteProcessLog(this, _T("编码器复位预约尚未释放，打印任务未启动"));
+		return FALSE;
+	}
 	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
 	{
 		WriteProcessLog(this, _T("通信检查期间开始压墨，打印任务未启动"));
@@ -475,6 +530,7 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 	LONG nLastProbeRequest = 0;
 	const auto removeClient = [&](size_t i)
 	{
+		CancelSocketEncoderReservation(pDlg, clientSockets[i]);
 		if (pythonPeers[i])
 			InterlockedExchange(&pDlg->m_lPythonProbeReply, 0);
 		if (clientSockets[i] == hReverseSocket)
@@ -653,6 +709,7 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 					{
 						command.erase(command.size() - 1);
 					}
+					const int nEncoderAction = GetSocketEncoderAction(command);
 					if (_stricmp(command.c_str(), "HELLO PLC") == 0)
 					{
 						const char szReply[] = "OK HELLO PLC\r\n";
@@ -680,6 +737,36 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 							WriteProcessLog(pDlg, _T("收到Python通信确认：TOKEN=%ld"), nToken);
 						}
 					}
+					else if (nEncoderAction >= 0)
+					{
+						SocketEncoderRequest request = {};
+						request.action = static_cast<SocketEncoderAction>(nEncoderAction);
+						request.hOwner = hClientSocket;
+						char chExtra = 0;
+						if (sscanf_s(command.c_str(), "%*s TOKEN=%ld %c", &request.nToken,
+							&chExtra, 1) != 1 || request.nToken <= 0)
+							request.pszError = "INVALID_TOKEN";
+						else if (!pythonPeers[i])
+							request.pszError = "NOT_READY";
+						else if (!::IsWindow(pDlg->GetSafeHwnd()))
+							request.pszError = "STOPPING";
+						else
+							pDlg->SendMessage(WM_SOCKET_ENCODER_CONTROL, 0,
+								reinterpret_cast<LPARAM>(&request));
+						char szReply[160] = {};
+						if (request.pszError != NULL)
+							sprintf_s(szReply, "ERR %s TOKEN=%ld REASON=%s\r\n",
+								ENCODER_COMMAND_NAMES[nEncoderAction], request.nToken, request.pszError);
+						else if (request.action == ENCODER_RESET_EXECUTE)
+							sprintf_s(szReply, "OK RESET_ENCODER TOKEN=%ld ENC=%u\r\n",
+								request.nToken, static_cast<unsigned int>(ZERO_POSITION));
+						else
+							sprintf_s(szReply, "OK %s TOKEN=%ld\r\n",
+								ENCODER_COMMAND_NAMES[nEncoderAction], request.nToken);
+						const int nReplyLength = static_cast<int>(strlen(szReply));
+						if (send(hClientSocket, szReply, nReplyLength, 0) != nReplyLength)
+							shutdown(hClientSocket, SD_BOTH);
+					}
 					else if (_stricmp(command.c_str(), "FLASH") == 0)
 					{
 						if (!::IsWindow(pDlg->GetSafeHwnd()))
@@ -703,6 +790,10 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 							{
 								sprintf_s(szReply,
 									"ERR FLASH GET_STATE_FAILED BEFORE=UNKNOWN AFTER=UNKNOWN\r\n");
+							}
+							else if (flashResult.nError == 3)
+							{
+								sprintf_s(szReply, "ERR FLASH BUSY BEFORE=UNKNOWN AFTER=UNKNOWN\r\n");
 							}
 							else
 							{
@@ -795,6 +886,7 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 
 	for (size_t i = 0; i < clientSockets.size(); ++i)
 	{
+		CancelSocketEncoderReservation(pDlg, clientSockets[i]);
 		shutdown(clientSockets[i], SD_BOTH);
 		closesocket(clientSockets[i]);
 	}
@@ -907,6 +999,12 @@ CNetScanDemoDlg::CNetScanDemoDlg(CWnd* pParent /*=NULL*/)
 	m_lPythonProbeReply = 0;
 	m_bCheckingPythonConnection = FALSE;
 	m_bClosing = FALSE;
+	m_nEncoderResetToken = 0;
+	m_hEncoderResetOwner = INVALID_SOCKET;
+	m_nEncoderResetResult = 0;
+	m_bDeviceInitialized = FALSE;
+	m_bAirInkDialogOpen = FALSE;
+	m_bPressInkOutputUnknown = FALSE;
 	m_hListenSocket = INVALID_SOCKET;
 	m_pSocketServerThread = NULL;
 	m_bSocketInitialized = FALSE;
@@ -975,6 +1073,7 @@ BEGIN_MESSAGE_MAP(CNetScanDemoDlg, CDialogEx)
 	ON_MESSAGE(WM_APPEND_PROCESS_LOG, &CNetScanDemoDlg::OnAppendProcessLog)
 	ON_MESSAGE(WM_SOCKET_FLASH_CONTROL, &CNetScanDemoDlg::OnSocketFlashControl)
 	ON_MESSAGE(WM_SOCKET_PRESS_INK_CONTROL, &CNetScanDemoDlg::OnSocketPressInkControl)
+	ON_MESSAGE(WM_SOCKET_ENCODER_CONTROL, &CNetScanDemoDlg::OnSocketEncoderControl)
 	ON_MESSAGE(WM_PRINT_JOB_FINISHED, &CNetScanDemoDlg::OnPrintJobFinished)
 END_MESSAGE_MAP()
 
@@ -1222,6 +1321,7 @@ void CNetScanDemoDlg::InitSystem()
 	//}
 	//初始化设备
     nResult = DEV_InitDevice(ZERO_POSITION);	//包含加载波形
+	m_bDeviceInitialized = nResult >= 0;
 	if (nResult < 0)
 	{
 		szErrInfo.Format(_T("[%d] >> 初始化设备失败"), nResult);
@@ -2471,19 +2571,40 @@ int CNetScanDemoDlg::ExecuteFlashToggle(BOOL bShowError, BOOL* pBeforeState, BOO
 
 void CNetScanDemoDlg::OnBnClickedButtonFlash()
 {
+	if (m_nEncoderResetToken != 0)
+	{
+		AfxMessageBox(_T("Python正在重置编码，不能切换闪喷。"));
+		return;
+	}
 	ExecuteFlashToggle(TRUE, NULL, NULL);
 }
 
 
+BOOL CNetScanDemoDlg::ExecuteEncoderReset()
+{
+	const BOOL bResult = DEV_ResetPrinterEncValue(ZERO_POSITION);
+	WriteProcessLog(this, _T("编码器复位%s：目标=0x%08X，当前=0x%08X"),
+		bResult ? _T("成功") : _T("失败"), static_cast<unsigned int>(ZERO_POSITION),
+		DEV_GetPrinterEncValue());
+	return bResult;
+}
+
 void CNetScanDemoDlg::OnBnClickedButtonResetEncoder()
 {
-
-		if(!DEV_ResetPrinterEncValue(ZERO_POSITION))
-		{
-			AfxMessageBox("失败");
-		}
-
-	
+	// MFC本地按钮仍只复位编码器，不负责移动X轴。
+	if (m_bClosing || m_bJobStarted || m_bPrinting || m_bCheckingPythonConnection ||
+		m_nEncoderResetToken != 0)
+	{
+		AfxMessageBox(_T("当前正在打印、检查通信或执行Python重置编码流程，不能单独复位编码器。"));
+		return;
+	}
+	if (!m_bDeviceInitialized || !DEV_DeviceIsConnected() || g_pSysInfo == NULL)
+	{
+		AfxMessageBox(_T("打印设备尚未初始化成功或已经断开，不能复位编码器。"));
+		return;
+	}
+	if (!ExecuteEncoderReset())
+		AfxMessageBox(_T("编码器复位失败。"));
 }
 
 void CNetScanDemoDlg::OnEnChangeMfcPrtFilePath()
@@ -2613,7 +2734,8 @@ void CNetScanDemoDlg::OnTimer(UINT_PTR nIDEvent)
 			KillTimer(SOCKET_PRESS_INK_TIMER_ID);
 			SocketPressInkRequest* pRequest = m_pSocketPressInkRequest;
 			m_pSocketPressInkRequest = NULL;
-			pRequest->nError = MVT_SetOutPut(0, 0x8, false) ? 0 : 4;
+			m_bPressInkOutputUnknown = !MVT_SetOutPut(0, 0x8, false);
+			pRequest->nError = m_bPressInkOutputUnknown ? 4 : 0;
 			WriteProcessLog(this, pRequest->nError == 0
 				? _T("Socket压墨完成：J62已关闭")
 				: _T("Socket压墨结束，但关闭J62失败"));
@@ -2629,12 +2751,14 @@ void CNetScanDemoDlg::OnTimer(UINT_PTR nIDEvent)
 			{
 				m_bAutoPressInkActive = FALSE;
 				const BOOL bStopped = MVT_SetOutPut(0, 0x8, false);
+				m_bPressInkOutputUnknown = !bStopped;
 				WriteProcessLog(this, bStopped
 					? _T("自动压墨完成：J62已关闭")
 					: _T("自动压墨结束，但关闭J62失败"));
 			}
 		}
-		else if (m_bJobStarted || m_bPrinting || m_pSocketPressInkRequest != NULL)
+		else if (m_bJobStarted || m_bPrinting || m_pSocketPressInkRequest != NULL ||
+			m_nEncoderResetToken != 0)
 		{
 			// 只有连续空闲满60秒才执行，打印或Socket压墨期间重新计算空闲时间。
 			m_dwAutoPressInkNextTick = dwNow + AUTO_PRESS_INK_INTERVAL_MS;
@@ -2697,9 +2821,11 @@ void CNetScanDemoDlg::StopAutoPressInk(BOOL bDisableSchedule)
 	}
 	if (m_bAutoPressInkActive)
 	{
-		MVT_SetOutPut(0, 0x8, false);
+		m_bPressInkOutputUnknown = !MVT_SetOutPut(0, 0x8, false);
 		m_bAutoPressInkActive = FALSE;
-		WriteProcessLog(this, _T("自动压墨已取消：J62已关闭"));
+		WriteProcessLog(this, m_bPressInkOutputUnknown
+			? _T("自动压墨取消，但关闭J62失败：禁止编码器复位，请检查输出并重新初始化设备")
+			: _T("自动压墨已取消：J62已关闭"));
 	}
 	UpdateAutoPressInkButton();
 }
@@ -2741,9 +2867,15 @@ void CNetScanDemoDlg::OnBnClickedButtonMovctl()
 #include "CAirInkDialog.h"
 void CNetScanDemoDlg::OnBnClickedButtonAirInk()
 {
-	
+	if (m_nEncoderResetToken != 0)
+	{
+		AfxMessageBox(_T("Python正在重置编码，不能打开墨路控制。"));
+		return;
+	}
+	m_bAirInkDialogOpen = TRUE;
 	CAirInkDialog inkDlg;
 	inkDlg.DoModal();
+	m_bAirInkDialogOpen = FALSE;
 }
 
 #include "CAdibCtrlDlg.h"
@@ -2838,12 +2970,114 @@ void CNetScanDemoDlg::UpdateImageInfo2()
 	SetDlgItemText(IDC_STATIC_ImageInfo2, szImageInfo);
 }
 
+LRESULT CNetScanDemoDlg::OnSocketEncoderControl(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(wParam);
+	SocketEncoderRequest* pRequest = reinterpret_cast<SocketEncoderRequest*>(lParam);
+	if (pRequest == NULL)
+		return 0;
+	const BOOL bOwnerMatches = m_nEncoderResetToken != 0 &&
+		m_hEncoderResetOwner == pRequest->hOwner &&
+		(m_nEncoderResetToken == pRequest->nToken ||
+			(pRequest->action == ENCODER_RESET_CANCEL && pRequest->nToken == 0));
+
+	// 释放预约即使在关闭时也允许；旧TOKEN的取消不能影响新流程。
+	if (pRequest->action == ENCODER_RESET_CANCEL || pRequest->action == ENCODER_RESET_END)
+	{
+		if (bOwnerMatches)
+		{
+			if (pRequest->action == ENCODER_RESET_END && m_nEncoderResetResult != 1)
+			{
+				pRequest->pszError = "NOT_RESET";
+				return 0;
+			}
+			WriteProcessLog(this, _T("Python重置编码流程%s，TOKEN=%ld，释放维护预约"),
+				pRequest->action == ENCODER_RESET_END ? _T("完成") : _T("取消/断开"),
+				m_nEncoderResetToken);
+			m_nEncoderResetToken = 0;
+			m_hEncoderResetOwner = INVALID_SOCKET;
+			m_nEncoderResetResult = 0;
+			if (!m_bClosing && !m_bCheckingPythonConnection)
+			{
+				GetDlgItem(IDC_BUTTON_STARTJOB)->EnableWindow(TRUE);
+				GetDlgItem(IDC_BUTTON_RESET_ENCODER)->EnableWindow(TRUE);
+			}
+		}
+		else if (pRequest->action == ENCODER_RESET_END)
+			pRequest->pszError = "NOT_RESERVED";
+		return 0;
+	}
+
+	if (m_bClosing || InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) != 0)
+	{
+		pRequest->pszError = "STOPPING";
+		return 0;
+	}
+	if (m_bJobStarted || m_bPrinting || m_bCheckingPythonConnection ||
+		m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive ||
+		m_bAirInkDialogOpen || m_bPressInkOutputUnknown)
+	{
+		pRequest->pszError = "BUSY";
+		return 0;
+	}
+	if (!m_bDeviceInitialized || !DEV_DeviceIsConnected() || g_pSysInfo == NULL)
+	{
+		pRequest->pszError = "NOT_READY";
+		return 0;
+	}
+	LPPRINTER_INFO pInfo = DEV_GetDeviceInfo();
+	if (pInfo == NULL)
+	{
+		pRequest->pszError = "NOT_READY";
+		return 0;
+	}
+	if ((pInfo->nIoState[0] & 0x8) != 0)
+	{
+		pRequest->pszError = "BUSY";
+		return 0;
+	}
+	if (pRequest->action == ENCODER_RESET_BEGIN)
+	{
+		if (bOwnerMatches)
+			return 0; // 重复BEGIN不改变状态，但仍须重新确认设备就绪。
+		if (m_nEncoderResetToken != 0)
+		{
+			pRequest->pszError = "BUSY";
+			return 0;
+		}
+		m_nEncoderResetToken = pRequest->nToken;
+		m_hEncoderResetOwner = pRequest->hOwner;
+		m_nEncoderResetResult = 0;
+		GetDlgItem(IDC_BUTTON_STARTJOB)->EnableWindow(FALSE);
+		GetDlgItem(IDC_BUTTON_RESET_ENCODER)->EnableWindow(FALSE);
+		WriteProcessLog(this, _T("Python重置编码已预约，TOKEN=%ld，等待X=0后执行复位；禁止启动打印"),
+			pRequest->nToken);
+		return 0;
+	}
+	if (!bOwnerMatches)
+	{
+		pRequest->pszError = "NOT_RESERVED";
+		return 0;
+	}
+	// 缓存本次结果：迟到或重复的RESET不能在X返程时再次改变编码器零点。
+	if (m_nEncoderResetResult == 0)
+		m_nEncoderResetResult = ExecuteEncoderReset() ? 1 : -1;
+	if (m_nEncoderResetResult != 1)
+		pRequest->pszError = "FAILED";
+	return 0;
+}
+
 LRESULT CNetScanDemoDlg::OnSocketFlashControl(WPARAM wParam, LPARAM lParam)
 {
 	UNREFERENCED_PARAMETER(wParam);
 	SocketFlashResult* pResult = reinterpret_cast<SocketFlashResult*>(lParam);
 	if (pResult == NULL)
 		return 0;
+	if (m_nEncoderResetToken != 0)
+	{
+		pResult->nError = 3;
+		return 0;
+	}
 	if (m_bClosing || InterlockedCompareExchange(&m_lStopSocketServer, 0, 0) != 0)
 	{
 		pResult->nError = 2;
@@ -2866,9 +3100,13 @@ LRESULT CNetScanDemoDlg::OnSocketPressInkControl(WPARAM wParam, LPARAM lParam)
 		if (m_pSocketPressInkRequest == pRequest)
 		{
 			KillTimer(SOCKET_PRESS_INK_TIMER_ID);
-			MVT_SetOutPut(0, 0x8, false);
+			m_bPressInkOutputUnknown = !MVT_SetOutPut(0, 0x8, false);
+			if (m_bPressInkOutputUnknown)
+				pRequest->nError = 4;
 			m_pSocketPressInkRequest = NULL;
-			WriteProcessLog(this, _T("Socket压墨等待超时，J62已强制关闭"));
+			WriteProcessLog(this, m_bPressInkOutputUnknown
+				? _T("Socket压墨取消，但关闭J62失败：禁止编码器复位，请检查输出并重新初始化设备")
+				: _T("Socket压墨已取消，J62已强制关闭"));
 		}
 		return 0;
 	}
@@ -2879,7 +3117,8 @@ LRESULT CNetScanDemoDlg::OnSocketPressInkControl(WPARAM wParam, LPARAM lParam)
 		SetEvent(pRequest->hCompletedEvent);
 		return 0;
 	}
-	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive)
+	if (m_pSocketPressInkRequest != NULL || m_bAutoPressInkActive ||
+		m_nEncoderResetToken != 0)
 	{
 		pRequest->nError = 2;
 		WriteProcessLog(this, _T("Socket压墨命令被拒绝：当前正在执行其他压墨操作"));
@@ -2897,9 +3136,9 @@ LRESULT CNetScanDemoDlg::OnSocketPressInkControl(WPARAM wParam, LPARAM lParam)
 	m_dwSocketPressInkDuration = static_cast<DWORD>(pRequest->fSeconds * 1000.0);
 	if (SetTimer(SOCKET_PRESS_INK_TIMER_ID, 100, NULL) == 0)
 	{
-		MVT_SetOutPut(0, 0x8, false);
+		m_bPressInkOutputUnknown = !MVT_SetOutPut(0, 0x8, false);
 		m_pSocketPressInkRequest = NULL;
-		pRequest->nError = 3;
+		pRequest->nError = m_bPressInkOutputUnknown ? 4 : 3;
 		WriteProcessLog(this, _T("Socket压墨启动失败：无法创建定时器"));
 		return 0;
 	}
