@@ -3066,6 +3066,12 @@ void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor()
 void CNetScanDemoDlg::OnBnClickedCheckCloseVtMonitor2()
 {
 	UpdateData(TRUE);
+	if (m_bSocketLogEnabled)
+	{
+		// 每次重新开启Log，从空白开始记录，不拼接上次显示的日志。
+		m_szProcessLog.Empty();
+		SetDlgItemText(IDC_STATIC_1111, _T(""));
+	}
 }
 
 void CNetScanDemoDlg::OnStnClickedStaticRipView()
