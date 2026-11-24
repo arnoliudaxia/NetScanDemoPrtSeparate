@@ -737,6 +737,24 @@ UINT CNetScanDemoDlg::SocketServerThread(LPVOID lpvoid)
 							WriteProcessLog(pDlg, _T("收到Python通信确认：TOKEN=%ld"), nToken);
 						}
 					}
+					else if (_stricmp(command.c_str(), "GET_ENCODER") == 0)
+					{
+						if (!pythonPeers[i])
+						{
+							const char szReply[] = "ERR GET_ENCODER REASON=NOT_READY\r\n";
+							send(hClientSocket, szReply, sizeof(szReply) - 1, 0);
+						}
+						else
+						{
+							const unsigned int nEncoder = DEV_GetPrinterEncValue();
+							char szReply[128] = {};
+							sprintf_s(szReply, "ENCODER POS=0x%08X DEC=%u\r\n",
+								nEncoder, nEncoder);
+							const int nReplyLength = static_cast<int>(strlen(szReply));
+							if (send(hClientSocket, szReply, nReplyLength, 0) != nReplyLength)
+								shutdown(hClientSocket, SD_BOTH);
+						}
+					}
 					else if (nEncoderAction >= 0)
 					{
 						SocketEncoderRequest request = {};
